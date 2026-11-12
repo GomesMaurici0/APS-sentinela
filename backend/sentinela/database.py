@@ -1,0 +1,216 @@
+import json
+import os
+import re
+import secrets
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+
+import numpy as np
+from cryptography.fernet import Fernet, InvalidToken
+
+from sentinela.autorizacao import UserPermission
+from sentinela.biometria.models import MODEL_ID
+from sentinela.biometria.pipeline import normalized_embedding
+from sentinela.errors import DomainError
+from sentinela.security import password_hash, password_matches, token_hash
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+class Database:
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.path = directory / "sentinela.db"
+        self.key_path = directory / "biometrics.key"
+        self._key_lock = threading.Lock()
+
+    @contextmanager
+    def connect(self, write=False):
+        connection = sqlite3.connect(self.path, timeout=5)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA secure_delete=ON")
+        try:
+            if write:
+                connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def initialize(self):
+        self.directory.mkdir(parents=True, exist_ok=True)
+        with self.connect() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version > 1:
+                raise ValueError("Banco foi criado por uma versão mais recente do sistema.")
+            if version == 0:
+                migration = Path(__file__).parent / "migrations" / "001_initial.sql"
+                connection.executescript("BEGIN IMMEDIATE;\n" + migration.read_text("utf-8"))
+
+    def cipher(self) -> Fernet:
+        with self._key_lock:
+            if not self.key_path.exists():
+                with self.connect() as connection:
+                    count = connection.execute(
+                        "SELECT COUNT(*) FROM biometric_references"
+                    ).fetchone()[0]
+                if count:
+                    raise DomainError(503, "Chave biométrica ausente. Operação interrompida.")
+                try:
+                    descriptor = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(Fernet.generate_key())
+            try:
+                return Fernet(self.key_path.read_bytes())
+            except (ValueError, OSError) as error:
+                raise DomainError(503, "Chave biométrica indisponível.") from error
+
+    def encode_samples(self, samples) -> bytes:
+        vectors = [normalized_embedding(sample).tolist() for sample in samples]
+        return self.cipher().encrypt(json.dumps(vectors, allow_nan=False).encode())
+
+    def references(self, connection) -> dict[str, list[np.ndarray]]:
+        rows = connection.execute("SELECT * FROM biometric_references").fetchall()
+        if not rows:
+            return {}
+        cipher = self.cipher()
+        result = {}
+        for row in rows:
+            if row["model_id"] != MODEL_ID:
+                raise DomainError(503, "Referências incompatíveis com o modelo atual.")
+            try:
+                vectors = json.loads(cipher.decrypt(row["encrypted_samples"]))
+                if not isinstance(vectors, list) or len(vectors) < 5:
+                    raise ValueError("Referências incompletas")
+                result[row["subject_id"]] = [normalized_embedding(sample) for sample in vectors]
+            except (InvalidToken, ValueError, TypeError) as error:
+                raise DomainError(
+                    503, "Referências biométricas inválidas ou chave incorreta."
+                ) from error
+        return result
+
+    def create_admin(self, username: str, password: str):
+        if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,40}", username):
+            raise ValueError("Administrador: use 3–40 letras, números, ponto, _ ou -.")
+        encoded = password_hash(password)
+        self.initialize()
+        try:
+            with self.connect(write=True) as connection:
+                if connection.execute("SELECT COUNT(*) FROM administrators").fetchone()[0]:
+                    raise ValueError(
+                        "Administrador já cadastrado. A criação inicial não pode ser repetida."
+                    )
+                connection.execute(
+                    "INSERT INTO administrators VALUES (?, ?, ?)", (username, encoded, now())
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("Administrador já cadastrado.") from error
+
+    def login(self, username: str, password: str) -> tuple[str, dict]:
+        timestamp = time.time()
+        # Scrypt é calculado fora da transação de escrita.
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT password_hash FROM administrators WHERE username=?", (username,)
+            ).fetchone()
+        # Mesmo custo para nome desconhecido, sem revelar existência do administrador.
+        dummy = "scrypt$" + "00" * 16 + "$" + "00" * 64
+        valid = password_matches(password, row[0] if row else dummy)
+        with self.connect(write=True) as connection:
+            connection.execute(
+                "DELETE FROM login_failures WHERE occurred_at < ?", (timestamp - 60,)
+            )
+            connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (timestamp,))
+            count = connection.execute("SELECT COUNT(*) FROM login_failures").fetchone()[0]
+            if count >= 5:
+                raise DomainError(429, "Muitas tentativas. Aguarde um minuto.")
+            if not valid:
+                connection.execute("INSERT INTO login_failures VALUES (?)", (timestamp,))
+            else:
+                token = secrets.token_urlsafe(32)
+                csrf = secrets.token_urlsafe(32)
+                expiry = timestamp + 8 * 60 * 60
+                connection.execute(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+                    (token_hash(token), username, csrf, expiry),
+                )
+        if not valid:
+            raise DomainError(401, "Usuário ou senha inválidos.")
+        return token, {"username": username, "csrf_token": csrf, "expires_at": expiry}
+
+    def session(self, token: str | None) -> dict:
+        if not token or len(token) > 128:
+            raise DomainError(401, "Entre com a conta administrativa.")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE token_hash=? AND expires_at>?",
+                (token_hash(token), time.time()),
+            ).fetchone()
+        if row is None:
+            raise DomainError(401, "Sessão ausente ou expirada. Entre novamente.")
+        return dict(row)
+
+    @staticmethod
+    def user(connection, subject_id: str) -> dict:
+        row = connection.execute("SELECT * FROM users WHERE subject_id=?", (subject_id,)).fetchone()
+        if row is None:
+            raise DomainError(404, "Usuário não encontrado.")
+        value = dict(row)
+        value["active"] = bool(value["active"])
+        value["divisions"] = [
+            item[0]
+            for item in connection.execute(
+                "SELECT division FROM user_divisions WHERE subject_id=? ORDER BY division",
+                (subject_id,),
+            )
+        ]
+        reference = connection.execute(
+            "SELECT sample_count FROM biometric_references WHERE subject_id=?", (subject_id,)
+        ).fetchone()
+        value["sample_count"] = reference[0] if reference else 0
+        return value
+
+    @staticmethod
+    def permission(user: dict) -> UserPermission:
+        return UserPermission(user["level"], frozenset(user["divisions"]), user["active"])
+
+    @staticmethod
+    def insert_user(connection, subject_id, display_name, level, active, divisions):
+        stamp = now()
+        try:
+            connection.execute(
+                "INSERT INTO users VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
+                (subject_id, display_name, level, int(active), stamp, stamp),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DomainError(409, "Identificador já cadastrado.") from error
+        connection.executemany(
+            "INSERT INTO user_divisions VALUES (?, ?)",
+            [(subject_id, division) for division in divisions],
+        )
+
+    @staticmethod
+    def save_samples(
+        connection, subject_id, encrypted, consent_at=None, consent_version="cadastro-v1"
+    ):
+        connection.execute(
+            "INSERT OR REPLACE INTO biometric_references VALUES (?, ?, ?, ?, ?)",
+            (subject_id, MODEL_ID, encrypted, 5, now()),
+        )
+        connection.execute(
+            "UPDATE users SET consent_at=?, consent_version=?, updated_at=? WHERE subject_id=?",
+            (consent_at or now(), consent_version, now(), subject_id),
+        )

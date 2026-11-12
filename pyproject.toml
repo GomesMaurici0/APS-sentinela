@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinela-aps"
+version = "0.2.0"
+description = "Protótipo acadêmico local de reconhecimento facial e autorização"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "numpy>=2.2,<3",
+  "opencv-python>=4.10,<5",
+  "cryptography>=44,<49",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "pillow>=11,<14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "httpx>=0.28,<1"]
+
+[tool.setuptools.package-data]
+sentinela = ["migrations/*.sql"]
+
+[project.scripts]
+sentinela = "sentinela.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+markers = ["models: integração com pesos locais, sem imagens reais"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
