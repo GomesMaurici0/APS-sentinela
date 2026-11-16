@@ -83,3 +83,8 @@ Veja os demais comandos com python -m sentinela.cli --help.
 Os documentos acadêmicos e relatórios antigos registram etapas anteriores. Para
 instalação e execução atuais, siga este README. Orientação recebida em 09/11/2026:
 a avaliação será uma apresentação. Roteiro: output/docx/SENTINELA_Guia_Apresentacao.txt.
+
+## Estudar as variáveis
+
+Guia de nomes em português e ordem de leitura: docs/nomes-em-portugues.md.
+Reinicie a execução na IDE após atualizar o código.

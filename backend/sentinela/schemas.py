@@ -22,13 +22,13 @@ class UserUpdate(Input):
 
     @field_validator("level", mode="before")
     @classmethod
-    def integer_level(cls, value):
-        if type(value) is not int:
+    def validar_nivel_inteiro(cls, valor):
+        if type(valor) is not int:
             raise ValueError("Nível deve ser inteiro")
-        return value
+        return valor
 
     @model_validator(mode="after")
-    def permissions(self):
+    def validar_permissoes(self):
         if isinstance(self.level, bool):
             raise ValueError("Nível inválido")
         if len(set(self.divisions)) != len(self.divisions):
@@ -51,10 +51,10 @@ class Enrollment(Input):
 
     @field_validator("consent", mode="before")
     @classmethod
-    def explicit_consent(cls, value):
-        if value is not True:
+    def validar_consentimento_explicito(cls, valor):
+        if valor is not True:
             raise ValueError("Consentimento explícito obrigatório")
-        return value
+        return valor
 
 
 class AttemptInput(ImageInput):
@@ -63,13 +63,13 @@ class AttemptInput(ImageInput):
 
     @field_validator("requested_level", mode="before")
     @classmethod
-    def integer_level(cls, value):
-        if type(value) is not int:
+    def validar_nivel_inteiro(cls, valor):
+        if type(valor) is not int:
             raise ValueError("Nível deve ser inteiro")
-        return value
+        return valor
 
     @model_validator(mode="after")
-    def target(self):
+    def validar_recurso(self):
         if isinstance(self.requested_level, bool):
             raise ValueError("Nível inválido")
         if (self.requested_level == 2) != (self.division is not None):

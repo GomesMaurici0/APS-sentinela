@@ -12,192 +12,192 @@ import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
-from sentinela.autorizacao import AccessDecision, authorize
-from sentinela.biometria.matching import MatchStatus, identify
+from sentinela.autorizacao import AccessDecision, autorizar
+from sentinela.biometria.matching import MatchStatus, identificar
 from sentinela.biometria.models import DEFAULT_MODELS, MODEL_ID
 from sentinela.biometria.pipeline import Analysis, CaptureStatus, FacePipeline
 from sentinela.config import BiometricConfig
-from sentinela.database import Database, now
+from sentinela.database import Database, agora
 from sentinela.errors import DomainError
 
 
-def decode_image(encoded: str) -> np.ndarray:
+def decodificar_imagem(encoded: str) -> np.ndarray:
     try:
-        raw = base64.b64decode(encoded, validate=True)
+        dados_brutos = base64.b64decode(encoded, validate=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as image:
-                if image.format not in ("JPEG", "PNG") or not (
-                        16 <= image.width <= 960 and 16 <= image.height <= 960
+            with Image.open(io.BytesIO(dados_brutos)) as imagem:
+                if imagem.format not in ("JPEG", "PNG") or not (
+                    16 <= imagem.width <= 960 and 16 <= imagem.height <= 960
                 ):
                     raise ValueError("Dimensões ou formato inválidos")
-                image.verify()
-        frame = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
+                imagem.verify()
+        quadro = cv2.imdecode(np.frombuffer(dados_brutos, np.uint8), cv2.IMREAD_COLOR)
+        if quadro is None:
             raise ValueError("Imagem inválida")
-        return frame
+        return quadro
     except (
-            ValueError,
-            OSError,
-            binascii.Error,
-            UnidentifiedImageError,
-            Image.DecompressionBombError,
-            Image.DecompressionBombWarning,
-            cv2.error,
-    ) as error:
+        ValueError,
+        OSError,
+        binascii.Error,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        cv2.error,
+    ) as erro:
         raise DomainError(
             422, "Imagem inválida. Use JPEG/PNG com dimensões entre 16 e 960 px."
-        ) from error
+        ) from erro
 
 
-def capture_data(result: Analysis) -> dict:
-    aligned = None
-    if result.aligned is not None:
-        ok, encoded = cv2.imencode(".jpg", result.aligned)
-        if ok:
-            aligned = base64.b64encode(encoded).decode("ascii")
+def dados_captura(resultado: Analysis) -> dict:
+    rosto_alinhado = None
+    if resultado.aligned is not None:
+        sucesso, encoded = cv2.imencode(".jpg", resultado.aligned)
+        if sucesso:
+            rosto_alinhado = base64.b64encode(encoded).decode("ascii")
     return {
-        "status": result.status.value,
-        "brightness": result.brightness,
-        "sharpness": result.sharpness,
-        "elapsed_ms": round(result.elapsed_ms, 2),
-        "width": result.frame.shape[1] if result.frame is not None else None,
-        "height": result.frame.shape[0] if result.frame is not None else None,
-        "faces": result.faces.tolist() if result.faces is not None else [],
-        "aligned_image": aligned,
+        "status": resultado.status.value,
+        "brightness": resultado.brightness,
+        "sharpness": resultado.sharpness,
+        "elapsed_ms": round(resultado.elapsed_ms, 2),
+        "width": resultado.frame.shape[1] if resultado.frame is not None else None,
+        "height": resultado.frame.shape[0] if resultado.frame is not None else None,
+        "faces": resultado.faces.tolist() if resultado.faces is not None else [],
+        "aligned_image": rosto_alinhado,
     }
 
 
-def attempt_record(row) -> dict:
-    record = dict(row)
-    record["granted"] = bool(record["granted"])
-    record["config"] = json.loads(record.pop("config_json"))
-    return record
+def registro_tentativa(linha) -> dict:
+    registro = dict(linha)
+    registro["granted"] = bool(registro["granted"])
+    registro["config"] = json.loads(registro.pop("config_json"))
+    return registro
 
 
 class AccessService:
-    def __init__(self, database: Database, models=DEFAULT_MODELS, pipeline=None):
-        self.database = database
-        self.models = models
-        self.pipeline = pipeline
-        self.config = pipeline.config if pipeline else BiometricConfig()
+    def __init__(self, banco: Database, modelos=DEFAULT_MODELS, motor_facial=None):
+        self.database = banco
+        self.models = modelos
+        self.pipeline = motor_facial
+        self.config = motor_facial.config if motor_facial else BiometricConfig()
         self.lock = threading.Lock()
         self.rate_lock = threading.Lock()
         self.last_attempt = 0.0
 
     @contextmanager
-    def exclusive(self):
+    def processamento_exclusivo(self):
         if not self.lock.acquire(timeout=1):
             raise DomainError(429, "Processamento ocupado. Aguarde e tente novamente.")
         try:
             if self.pipeline is None:
                 self.pipeline = FacePipeline(self.models, self.config)
             yield
-        except (cv2.error, ValueError, OSError) as error:
+        except (cv2.error, ValueError, OSError) as erro:
             raise DomainError(
                 503, "Motor biométrico indisponível. Verifique modelos e chave."
-            ) from error
+            ) from erro
         finally:
             self.lock.release()
 
-    def analyze(self, encoded: str) -> dict:
-        frame = decode_image(encoded)
-        with self.exclusive():
-            return capture_data(self.pipeline.analyze(frame))
+    def analisar(self, encoded: str) -> dict:
+        quadro = decodificar_imagem(encoded)
+        with self.processamento_exclusivo():
+            return dados_captura(self.pipeline.analisar(quadro))
 
-    def enroll(self, subject_id: str, images: list[str]):
-        with self.database.connect() as connection:
-            self.database.user(connection, subject_id)
-        results = []
-        with self.exclusive():
-            for index, encoded in enumerate(images, 1):
-                result = self.pipeline.analyze(decode_image(encoded))
-                if result.status != CaptureStatus.OK:
-                    raise DomainError(422, f"Amostra {index} rejeitada: {result.status.value}.")
-                results.append(result.embedding)
-        encrypted = self.database.encode_samples(results)
-        with self.database.connect(write=True) as connection:
-            self.database.user(connection, subject_id)
-            references = self.database.references(connection)
-            references.pop(subject_id, None)
-            for sample in results:
-                match = identify(sample, references, self.config)
+    def cadastrar_biometria(self, identificador: str, imagens: list[str]):
+        with self.database.conectar() as conexao:
+            self.database.obter_usuario(conexao, identificador)
+        resultados = []
+        with self.processamento_exclusivo():
+            for indice, encoded in enumerate(imagens, 1):
+                resultado = self.pipeline.analisar(decodificar_imagem(encoded))
+                if resultado.status != CaptureStatus.OK:
+                    raise DomainError(422, f"Amostra {indice} rejeitada: {resultado.status.value}.")
+                resultados.append(resultado.embedding)
+        conteudo_cifrado = self.database.cifrar_amostras(resultados)
+        with self.database.conectar(write=True) as conexao:
+            self.database.obter_usuario(conexao, identificador)
+            referencias = self.database.obter_referencias(conexao)
+            referencias.pop(identificador, None)
+            for amostra in resultados:
+                identificacao = identificar(amostra, referencias, self.config)
                 if (
-                        match.similarity is not None
-                        and match.similarity >= self.config.similarity_threshold
+                    identificacao.similarity is not None
+                    and identificacao.similarity >= self.config.similarity_threshold
                 ):
                     raise DomainError(
                         409, "Rosto semelhante a outro cadastro. Revise as identidades."
                     )
-            self.database.save_samples(connection, subject_id, encrypted)
+            self.database.salvar_amostras(conexao, identificador, conteudo_cifrado)
 
-    def attempt(self, image: str, requested_level: int, division: str | None) -> dict:
-        start = time.perf_counter()
+    def avaliar_acesso(self, imagem: str, nivel_solicitado: int, divisao: str | None) -> dict:
+        inicio = time.perf_counter()
         with self.rate_lock:
             if time.monotonic() - self.last_attempt < 0.8:
                 raise DomainError(429, "Aguarde um segundo entre tentativas.")
             self.last_attempt = time.monotonic()
-        result = None
-        match = None
-        engine_failure = False
+        resultado = None
+        identificacao = None
+        falha_motor = False
         try:
-            frame = decode_image(image)
-            with self.exclusive():
-                result = self.pipeline.analyze(frame)
-        except DomainError as error:
-            if error.status == 429:
+            quadro = decodificar_imagem(imagem)
+            with self.processamento_exclusivo():
+                resultado = self.pipeline.analisar(quadro)
+        except DomainError as erro:
+            if erro.status == 429:
                 raise
-            engine_failure = error.status == 503
-            reason = "falha_biometrica" if engine_failure else "imagem_invalida"
+            falha_motor = erro.status == 503
+            motivo = "falha_biometrica" if falha_motor else "imagem_invalida"
         else:
-            reason = result.status.value
-        decision = AccessDecision(False, reason)
-        subject_id = None
+            motivo = resultado.status.value
+        decisao = AccessDecision(False, motivo)
+        identificador = None
         # Permissões, referências e auditoria usam a mesma transação: alterações de cadastro
         # não podem intercalar entre autorização e persistência da decisão.
-        with self.database.connect(write=True) as connection:
-            if result is not None and result.status == CaptureStatus.OK:
+        with self.database.conectar(write=True) as conexao:
+            if resultado is not None and resultado.status == CaptureStatus.OK:
                 try:
-                    match = identify(
-                        result.embedding, self.database.references(connection), self.config
+                    identificacao = identificar(
+                        resultado.embedding, self.database.obter_referencias(conexao), self.config
                     )
-                    decision = AccessDecision(False, match.status.value)
-                    if match.status == MatchStatus.MATCHED:
-                        subject_id = match.subject_id
-                        user = self.database.user(connection, subject_id)
-                        decision = authorize(
-                            self.database.permission(user), requested_level, division
+                    decisao = AccessDecision(False, identificacao.status.value)
+                    if identificacao.status == MatchStatus.MATCHED:
+                        identificador = identificacao.subject_id
+                        usuario = self.database.obter_usuario(conexao, identificador)
+                        decisao = autorizar(
+                            self.database.obter_permissao(usuario), nivel_solicitado, divisao
                         )
                 except (DomainError, ValueError):
-                    engine_failure = True
-                    subject_id = None
-                    match = None
-                    decision = AccessDecision(False, "falha_biometrica")
-            elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-            cursor = connection.execute(
+                    falha_motor = True
+                    identificador = None
+                    identificacao = None
+                    decisao = AccessDecision(False, "falha_biometrica")
+            tempo_ms = round((time.perf_counter() - inicio) * 1000, 2)
+            cursor_sql = conexao.execute(
                 "INSERT INTO attempts (occurred_at, subject_id, requested_level, "
                 "division, granted, "
                 "reason, similarity, margin, elapsed_ms, model_id, config_json) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    now(),
-                    subject_id,
-                    requested_level,
-                    division,
-                    int(decision.granted),
-                    decision.reason,
-                    match.similarity if match else None,
-                    match.margin if match else None,
-                    elapsed_ms,
+                    agora(),
+                    identificador,
+                    nivel_solicitado,
+                    divisao,
+                    int(decisao.granted),
+                    decisao.reason,
+                    identificacao.similarity if identificacao else None,
+                    identificacao.margin if identificacao else None,
+                    tempo_ms,
                     MODEL_ID,
                     json.dumps(asdict(self.config)),
                 ),
             )
-            row = connection.execute(
-                "SELECT * FROM attempts WHERE id=?", (cursor.lastrowid,)
+            linha = conexao.execute(
+                "SELECT * FROM attempts WHERE id=?", (cursor_sql.lastrowid,)
             ).fetchone()
-            output = attempt_record(row)
-        if engine_failure:
+            saida = registro_tentativa(linha)
+        if falha_motor:
             raise DomainError(503, "Motor biométrico indisponível. Tentativa negada e registrada.")
-        output["capture"] = capture_data(result) if result else None
-        return output
+        saida["capture"] = dados_captura(resultado) if resultado else None
+        return saida

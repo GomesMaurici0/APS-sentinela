@@ -1,261 +1,261 @@
 import {useEffect, useRef, useState} from 'react';
 import {Camera as CameraIcon, CameraOff, ScanFace, X} from 'lucide-react';
-import {api, Attempt, Capture, label, Person} from './api';
+import {requisitarApi, Attempt, Capture, traduzirMotivo, Person} from './api';
 
 type Props = { person?: Person; onSaved?: () => void; onCancel?: () => void; onAttempt?: () => void };
 
-export function Camera({person, onSaved, onCancel, onAttempt}: Props) {
-  const video = useRef<HTMLVideoElement>(null);
-  const stream = useRef<MediaStream | null>(null);
-  const generation = useRef(0);
-  const alive = useRef(true);
-  const pending = useRef(false);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [images, setImages] = useState<string[]>([]);
-  const [capture, setCapture] = useState<Capture | null>(null);
-  const [frozen, setFrozen] = useState<string | null>(null);
-  const [decision, setDecision] = useState<Attempt | null>(null);
-  const [level, setLevel] = useState(1);
-  const [division, setDivision] = useState('');
-  const [consent, setConsent] = useState(false);
+export function Camera({person: pessoa, onSaved: aoSalvar, onCancel: aoCancelar, onAttempt: aoAvaliar}: Props) {
+  const referenciaVideo = useRef<HTMLVideoElement>(null);
+  const fluxoCamera = useRef<MediaStream | null>(null);
+  const geracaoCaptura = useRef(0);
+  const componenteAtivo = useRef(true);
+  const requisicaoPendente = useRef(false);
+  const [cameraAtiva, definirCameraAtiva] = useState(false);
+  const [erro, definirErro] = useState('');
+  const [processando, definirProcessando] = useState(false);
+  const [imagens, definirImagens] = useState<string[]>([]);
+  const [captura, definirCaptura] = useState<Capture | null>(null);
+  const [imagemCongelada, definirImagemCongelada] = useState<string | null>(null);
+  const [decisao, definirDecisao] = useState<Attempt | null>(null);
+  const [nivel, definirNivel] = useState(1);
+  const [divisao, definirDivisao] = useState('');
+  const [consentimento, definirConsentimento] = useState(false);
 
-  function stop() {
-    generation.current++;
-    stream.current?.getTracks().forEach(track => track.stop());
-    stream.current = null;
-    setRunning(false);
-    setFrozen(null);
-    setImages([]);
-    setCapture(null);
-    setDecision(null);
+  function pararCamera() {
+    geracaoCaptura.current++;
+    fluxoCamera.current?.getTracks().forEach(trilha => trilha.stop());
+    fluxoCamera.current = null;
+    definirCameraAtiva(false);
+    definirImagemCongelada(null);
+    definirImagens([]);
+    definirCaptura(null);
+    definirDecisao(null);
   }
 
   useEffect(() => {
-    alive.current = true;
+    componenteAtivo.current = true;
     return () => {
-      alive.current = false;
-      generation.current++;
-      stream.current?.getTracks().forEach(track => track.stop());
+      componenteAtivo.current = false;
+      geracaoCaptura.current++;
+      fluxoCamera.current?.getTracks().forEach(trilha => trilha.stop());
     };
   }, []);
 
-  async function start() {
-    setError('');
-    const id = ++generation.current;
+  async function iniciarCamera() {
+    definirErro('');
+    const idCaptura = ++geracaoCaptura.current;
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Câmera indisponível. Abra pelo endereço local indicado.');
-      const media = await navigator.mediaDevices.getUserMedia({video: {width: 640, height: 480}, audio: false});
-      if (!alive.current || id !== generation.current) {
-        media.getTracks().forEach(track => track.stop());
+      const midia = await navigator.mediaDevices.getUserMedia({video: {width: 640, height: 480}, audio: false});
+      if (!componenteAtivo.current || idCaptura !== geracaoCaptura.current) {
+        midia.getTracks().forEach(trilha => trilha.stop());
         return;
       }
-      stream.current = media;
-      if (video.current) {
-        video.current.srcObject = media;
-        await video.current.play();
+      fluxoCamera.current = midia;
+      if (referenciaVideo.current) {
+        referenciaVideo.current.srcObject = midia;
+        await referenciaVideo.current.play();
       }
-      media.getVideoTracks()[0].addEventListener('ended', () => {
-        if (alive.current && generation.current === id) {
-          stop();
-          setError('A câmera foi desconectada. Inicie novamente.');
+      midia.getVideoTracks()[0].addEventListener('ended', () => {
+        if (componenteAtivo.current && geracaoCaptura.current === idCaptura) {
+          pararCamera();
+          definirErro('A câmera foi desconectada. Inicie novamente.');
         }
       });
-      setRunning(true);
-    } catch (e) {
-      stream.current?.getTracks().forEach(track => track.stop());
-      stream.current = null;
-      if (alive.current) setError(e instanceof DOMException ? 'Não foi possível abrir a câmera. Verifique a permissão e outros aplicativos.' : (e as Error).message);
+      definirCameraAtiva(true);
+    } catch (evento) {
+      fluxoCamera.current?.getTracks().forEach(trilha => trilha.stop());
+      fluxoCamera.current = null;
+      if (componenteAtivo.current) definirErro(evento instanceof DOMException ? 'Não foi possível abrir a câmera. Verifique a permissão e outros aplicativos.' : (evento as Error).message);
     }
   }
 
-  async function take() {
-    if (pending.current || !video.current || !running) return;
-    const source = video.current;
-    if (!source.videoWidth) {
-      setError('Aguarde a câmera iniciar.');
+  async function capturarQuadro() {
+    if (requisicaoPendente.current || !referenciaVideo.current || !cameraAtiva) return;
+    const videoOrigem = referenciaVideo.current;
+    if (!videoOrigem.videoWidth) {
+      definirErro('Aguarde a câmera iniciar.');
       return;
     }
-    if (!person && level === 2 && !division.trim()) {
-      setError('Informe a divisão solicitada.');
+    if (!pessoa && nivel === 2 && !divisao.trim()) {
+      definirErro('Informe a divisão solicitada.');
       return;
     }
-    const canvas = document.createElement('canvas');
-    const scale = Math.min(1, 640 / Math.max(source.videoWidth, source.videoHeight));
-    canvas.width = Math.round(source.videoWidth * scale);
-    canvas.height = Math.round(source.videoHeight * scale);
-    canvas.getContext('2d')!.drawImage(source, 0, 0, canvas.width, canvas.height);
-    const image = canvas.toDataURL('image/jpeg', .85).split(',')[1];
-    const id = generation.current;
-    pending.current = true;
-    setBusy(true);
-    setError('');
-    setDecision(null);
-    setCapture(null);
-    setFrozen(null);
+    const telaCaptura = document.createElement('canvas');
+    const escala = Math.min(1, 640 / Math.max(videoOrigem.videoWidth, videoOrigem.videoHeight));
+    telaCaptura.width = Math.round(videoOrigem.videoWidth * escala);
+    telaCaptura.height = Math.round(videoOrigem.videoHeight * escala);
+    telaCaptura.getContext('2d')!.drawImage(videoOrigem, 0, 0, telaCaptura.width, telaCaptura.height);
+    const imagem = telaCaptura.toDataURL('image/jpeg', .85).split(',')[1];
+    const idCaptura = geracaoCaptura.current;
+    requisicaoPendente.current = true;
+    definirProcessando(true);
+    definirErro('');
+    definirDecisao(null);
+    definirCaptura(null);
+    definirImagemCongelada(null);
     try {
-      if (person) {
-        const value = await api<Capture>('/biometrics/analyze', 'POST', {image});
-        if (!alive.current || generation.current !== id) return;
-        setCapture(value);
-        setFrozen(image);
-        if (value.status === 'ok') setImages(previous => [...previous, image]);
-        else setError(label(value.status));
+      if (pessoa) {
+        const valor = await requisitarApi<Capture>('/biometrics/analyze', 'POST', {image: imagem});
+        if (!componenteAtivo.current || geracaoCaptura.current !== idCaptura) return;
+        definirCaptura(valor);
+        definirImagemCongelada(imagem);
+        if (valor.status === 'ok') definirImagens(anteriores => [...anteriores, imagem]);
+        else definirErro(traduzirMotivo(valor.status));
       } else {
-        const value = await api<Attempt>('/attempts', 'POST', {
-          image, requested_level: level, division: level === 2 ? division.trim() : null,
+        const valor = await requisitarApi<Attempt>('/attempts', 'POST', {
+          image: imagem, requested_level: nivel, division: nivel === 2 ? divisao.trim() : null,
         });
-        if (!alive.current || generation.current !== id) return;
-        setDecision(value);
-        setCapture(value.capture ?? null);
-        setFrozen(image);
+        if (!componenteAtivo.current || geracaoCaptura.current !== idCaptura) return;
+        definirDecisao(valor);
+        definirCaptura(valor.capture ?? null);
+        definirImagemCongelada(imagem);
       }
-    } catch (e) {
-      if (alive.current && generation.current === id) setError((e as Error).message);
+    } catch (evento) {
+      if (componenteAtivo.current && geracaoCaptura.current === idCaptura) definirErro((evento as Error).message);
     } finally {
-      pending.current = false;
-      if (alive.current) {
-        setBusy(false);
-        if (!person) onAttempt?.();
+      requisicaoPendente.current = false;
+      if (componenteAtivo.current) {
+        definirProcessando(false);
+        if (!pessoa) aoAvaliar?.();
       }
     }
   }
 
-  async function save() {
-    if (!person || pending.current) return;
-    pending.current = true;
-    setBusy(true);
-    setError('');
+  async function salvar() {
+    if (!pessoa || requisicaoPendente.current) return;
+    requisicaoPendente.current = true;
+    definirProcessando(true);
+    definirErro('');
     try {
-      await api(`/users/${person.subject_id}/biometrics`, 'POST', {images, consent});
-      if (alive.current) {
-        stop();
-        onSaved?.();
+      await requisitarApi(`/users/${pessoa.subject_id}/biometrics`, 'POST', {images: imagens, consent: consentimento});
+      if (componenteAtivo.current) {
+        pararCamera();
+        aoSalvar?.();
       }
-    } catch (e) {
-      if (alive.current) setError((e as Error).message);
+    } catch (evento) {
+      if (componenteAtivo.current) definirErro((evento as Error).message);
     } finally {
-      pending.current = false;
-      if (alive.current) setBusy(false);
+      requisicaoPendente.current = false;
+      if (componenteAtivo.current) definirProcessando(false);
     }
   }
 
   return <section className="camera-workspace">
     <div className="camera-column">
-      <div className="section-heading"><h2>{person ? `Referências de ${person.display_name}` : 'Captura facial'}</h2>
-        {running && <button className="quiet" onClick={stop} disabled={busy}><CameraOff size={16}/> Desligar</button>}
+      <div className="section-heading"><h2>{pessoa ? `Referências de ${pessoa.display_name}` : 'Captura facial'}</h2>
+        {cameraAtiva && <button className="quiet" onClick={pararCamera} disabled={processando}><CameraOff size={16}/> Desligar</button>}
       </div>
       <div className="viewfinder">
-        <video ref={video} autoPlay muted playsInline className={running && !frozen ? '' : 'invisible'}/>
-        {frozen && <img className="capture-image" src={`data:image/jpeg;base64,${frozen}`}
+        <video ref={referenciaVideo} autoPlay muted playsInline className={cameraAtiva && !imagemCongelada ? '' : 'invisible'}/>
+        {imagemCongelada && <img className="capture-image" src={`data:image/jpeg;base64,${imagemCongelada}`}
                         alt="Última captura, mantida somente em memória"/>}
-        {frozen && capture?.width && capture.height &&
-            <svg className="face-overlay" viewBox={`0 0 ${capture.width} ${capture.height}`}
+        {imagemCongelada && captura?.width && captura.height &&
+            <svg className="face-overlay" viewBox={`0 0 ${captura.width} ${captura.height}`}
                  aria-label="Localização facial">
-              {capture.faces.map((face, i) => <g key={i}>
-                <rect x={face[0]} y={face[1]} width={face[2]} height={face[3]}/>
-                {[4, 6, 8, 10, 12].map(index => <circle key={index} cx={face[index]} cy={face[index + 1]} r="2"/>)}
+              {captura.faces.map((rosto, indiceRosto) => <g key={indiceRosto}>
+                <rect x={rosto[0]} y={rosto[1]} width={rosto[2]} height={rosto[3]}/>
+                {[4, 6, 8, 10, 12].map(indice => <circle key={indice} cx={rosto[indice]} cy={rosto[indice + 1]} r="2"/>)}
               </g>)}
             </svg>}
-        {!running &&
+        {!cameraAtiva &&
             <div className="camera-empty"><ScanFace size={56} strokeWidth={1}/><h3>Câmera desligada</h3><p>Ative para
               enquadrar um rosto.<br/>As imagens não serão gravadas.</p></div>}
         <span
-            className="viewfinder-label">{running ? (frozen ? 'Última captura' : 'Prévia local') : 'Captura sob demanda'}</span>
+            className="viewfinder-label">{cameraAtiva ? (imagemCongelada ? 'Última captura' : 'Prévia local') : 'Captura sob demanda'}</span>
       </div>
       <div className="camera-actions">
-        {!running ?
-            <button className="primary" onClick={start} disabled={!!person && !consent}><CameraIcon size={18}/> Ativar
+        {!cameraAtiva ?
+            <button className="primary" onClick={iniciarCamera} disabled={!!pessoa && !consentimento}><CameraIcon size={18}/> Ativar
               câmera</button>
-            : frozen ? <button className="primary" onClick={() => {
-                  setFrozen(null);
-                  setCapture(null);
-                  setError('');
-                }} disabled={busy || (!!person && images.length >= 5)}>Retomar câmera</button>
+            : imagemCongelada ? <button className="primary" onClick={() => {
+                  definirImagemCongelada(null);
+                  definirCaptura(null);
+                  definirErro('');
+                }} disabled={processando || (!!pessoa && imagens.length >= 5)}>Retomar câmera</button>
                 :
-                <button className="primary" onClick={take} disabled={busy || (!!person && images.length >= 5)}><ScanFace
-                    size={18}/>{busy ? 'Processando…' : person ? 'Coletar amostra' : 'Avaliar acesso'}</button>}
-        {person && <button className="quiet" onClick={() => {
-          stop();
-          onCancel?.();
-        }} disabled={busy}><X size={16}/> Cancelar cadastro</button>}
+                <button className="primary" onClick={capturarQuadro} disabled={processando || (!!pessoa && imagens.length >= 5)}><ScanFace
+                    size={18}/>{processando ? 'Processando…' : pessoa ? 'Coletar amostra' : 'Avaliar acesso'}</button>}
+        {pessoa && <button className="quiet" onClick={() => {
+          pararCamera();
+          aoCancelar?.();
+        }} disabled={processando}><X size={16}/> Cancelar cadastro</button>}
       </div>
       <p className="hint">Uma captura por ação. Mantenha o rosto inteiro, com boa iluminação.</p>
     </div>
     <div className="decision-column">
-      {person ? <>
+      {pessoa ? <>
         <h2>Cadastro biométrico</h2><p className="muted">Colete cinco amostras com pequenas variações de pose. O
         cadastro só é salvo ao confirmar.</p>
-        <label className="check"><input type="checkbox" checked={consent} disabled={running || busy}
-                                        onChange={e => setConsent(e.target.checked)}/>
+        <label className="check"><input type="checkbox" checked={consentimento} disabled={cameraAtiva || processando}
+                                        onChange={evento => definirConsentimento(evento.target.checked)}/>
           O voluntário consentiu com o processamento facial local para a APS e foi informado sobre a exclusão e as
           limitações.</label>
-        <div className="sample-progress"><strong>{images.length} <span>/ 5 amostras</span></strong>
-          <progress max="5" value={images.length}/>
+        <div className="sample-progress"><strong>{imagens.length} <span>/ 5 amostras</span></strong>
+          <progress max="5" value={imagens.length}/>
         </div>
-        <div className="sample-strip">{images.map((image, index) => <img key={index}
-                                                                         src={`data:image/jpeg;base64,${image}`}
-                                                                         alt={`Amostra ${index + 1}, temporária`}/>)}</div>
-        <button className="primary wide" onClick={save}
-                disabled={images.length !== 5 || !consent || busy}>{busy ? 'Salvando…' : 'Salvar referências criptografadas'}</button>
-        {images.length > 0 && <button className="quiet" disabled={busy} onClick={() => {
-          setImages([]);
-          setFrozen(null);
-          setCapture(null);
+        <div className="sample-strip">{imagens.map((imagem, indice) => <img key={indice}
+                                                                         src={`data:image/jpeg;base64,${imagem}`}
+                                                                         alt={`Amostra ${indice + 1}, temporária`}/>)}</div>
+        <button className="primary wide" onClick={salvar}
+                disabled={imagens.length !== 5 || !consentimento || processando}>{processando ? 'Salvando…' : 'Salvar referências criptografadas'}</button>
+        {imagens.length > 0 && <button className="quiet" disabled={processando} onClick={() => {
+          definirImagens([]);
+          definirImagemCongelada(null);
+          definirCaptura(null);
         }}>Descartar amostras e recomeçar</button>}
       </> : <>
         <h2>Recurso solicitado</h2>
-        <label>Nível de acesso<select value={level} disabled={busy} onChange={e => {
-          setLevel(Number(e.target.value));
-          setDecision(null);
+        <label>Nível de acesso<select value={nivel} disabled={processando} onChange={evento => {
+          definirNivel(Number(evento.target.value));
+          definirDecisao(null);
         }}>
           <option value="1">1 — Acesso geral</option>
           <option value="2">2 — Divisão específica</option>
           <option value="3">3 — Exclusivo do ministro</option>
         </select></label>
-        {level === 2 && <label>Divisão<input value={division} maxLength={60} onChange={e => {
-          setDivision(e.target.value);
-          setDecision(null);
-        }} placeholder="Ex.: florestas" disabled={busy}/></label>}
-        <div className={`decision ${decision ? decision.granted ? 'granted' : 'denied' : ''}`} aria-live="polite">
+        {nivel === 2 && <label>Divisão<input value={divisao} maxLength={60} onChange={evento => {
+          definirDivisao(evento.target.value);
+          definirDecisao(null);
+        }} placeholder="Ex.: florestas" disabled={processando}/></label>}
+        <div className={`decision ${decisao ? decisao.granted ? 'granted' : 'denied' : ''}`} aria-live="polite">
           <ScanFace size={28}/>
-          <h3>{decision ? decision.granted ? 'Acesso autorizado' : 'Acesso negado' : 'Aguardando avaliação'}</h3>
-          <p>{decision ? label(decision.reason) : 'A identidade e as permissões serão verificadas a cada captura.'}</p>
-          {decision && <dl>
+          <h3>{decisao ? decisao.granted ? 'Acesso autorizado' : 'Acesso negado' : 'Aguardando avaliação'}</h3>
+          <p>{decisao ? traduzirMotivo(decisao.reason) : 'A identidade e as permissões serão verificadas a cada captura.'}</p>
+          {decisao && <dl>
             <div>
               <dt>Identidade</dt>
-              <dd>{decision.subject_id ?? 'Não identificada'}</dd>
+              <dd>{decisao.subject_id ?? 'Não identificada'}</dd>
             </div>
             <div>
               <dt>Registro</dt>
-              <dd>#{decision.id} · persistido</dd>
+              <dd>#{decisao.id} · persistido</dd>
             </div>
             <div>
               <dt>Tempo</dt>
-              <dd>{decision.elapsed_ms.toFixed(0)} ms</dd>
+              <dd>{decisao.elapsed_ms.toFixed(0)} ms</dd>
             </div>
           </dl>}
         </div>
       </>}
-      {error && <p className="error" role="alert">{error}</p>}
-      {capture && <div className="processing"><h3>Processamento da captura</h3>
-        <p>{label(capture.status)}</p>
+      {erro && <p className="error" role="alert">{erro}</p>}
+      {captura && <div className="processing"><h3>Processamento da captura</h3>
+        <p>{traduzirMotivo(captura.status)}</p>
         <dl>
           <div>
             <dt>Rostos detectados</dt>
-            <dd>{capture.faces.length}</dd>
+            <dd>{captura.faces.length}</dd>
           </div>
           <div>
             <dt>Iluminação média</dt>
-            <dd>{capture.brightness?.toFixed(0) ?? '—'}</dd>
+            <dd>{captura.brightness?.toFixed(0) ?? '—'}</dd>
           </div>
           <div>
             <dt>Nitidez (Laplaciano)</dt>
-            <dd>{capture.sharpness?.toFixed(0) ?? '—'}</dd>
+            <dd>{captura.sharpness?.toFixed(0) ?? '—'}</dd>
           </div>
         </dl>
-        {capture.aligned_image && <figure><img src={`data:image/jpeg;base64,${capture.aligned_image}`}
+        {captura.aligned_image && <figure><img src={`data:image/jpeg;base64,${captura.aligned_image}`}
                                                alt="Região facial alinhada pelo SFace"/>
           <figcaption>Região alinhada<br/>112 × 112 px</figcaption>
         </figure>}

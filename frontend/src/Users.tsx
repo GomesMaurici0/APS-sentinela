@@ -1,10 +1,10 @@
 import {useEffect, useState} from 'react';
 import {Download, Plus, ScanFace, Trash2, X} from 'lucide-react';
-import {api, Page, Person} from './api';
+import {requisitarApi, Page, Person} from './api';
 import {Camera} from './Camera';
 
 type Props = { onChanged: () => void };
-const blank = {
+const cadastroVazio = {
     subject_id: '',
     display_name: '',
     level: 1,
@@ -14,73 +14,73 @@ const blank = {
     consent_at: null
 } satisfies Person;
 
-export function Users({onChanged}: Props) {
-    const [page, setPage] = useState<Page<Person>>({items: [], total: 0, offset: 0, limit: 20});
-    const [offset, setOffset] = useState(0);
-    const [person, setPerson] = useState<Person | null>(null);
-    const [editing, setEditing] = useState(false);
-    const [enrolling, setEnrolling] = useState<Person | null>(null);
-    const [error, setError] = useState('');
-    const [notice, setNotice] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [loading, setLoading] = useState(true);
+export function Usuarios({onChanged: aoAlterar}: Props) {
+    const [pagina, definirPagina] = useState<Page<Person>>({items: [], total: 0, offset: 0, limit: 20});
+    const [deslocamento, definirDeslocamento] = useState(0);
+    const [pessoa, definirPessoa] = useState<Person | null>(null);
+    const [editando, definirEditando] = useState(false);
+    const [pessoaEmCadastro, definirPessoaEmCadastro] = useState<Person | null>(null);
+    const [erro, definirErro] = useState('');
+    const [aviso, definirAviso] = useState('');
+    const [processando, definirProcessando] = useState(false);
+    const [carregando, definirCarregando] = useState(true);
 
-    async function load() {
-        setLoading(true);
+    async function carregar() {
+        definirCarregando(true);
         try {
-            setPage(await api<Page<Person>>(`/users?offset=${offset}&limit=20`));
-        } catch (e) {
-            setError((e as Error).message);
+            definirPagina(await requisitarApi<Page<Person>>(`/users?offset=${deslocamento}&limit=20`));
+        } catch (evento) {
+            definirErro((evento as Error).message);
         } finally {
-            setLoading(false);
+            definirCarregando(false);
         }
     }
 
     useEffect(() => {
-        void load();
-    }, [offset]);
+        void carregar();
+    }, [deslocamento]);
 
-    async function remove(user: Person, biometricsOnly = false) {
-        if (!window.confirm(biometricsOnly ? `Excluir as referências de ${user.display_name}?` : `Excluir ${user.display_name}, suas referências e desvincular o histórico?`)) return;
-        setBusy(true);
-        setError('');
-        setNotice('');
+    async function excluir(usuario: Person, somenteBiometria = false) {
+        if (!window.confirm(somenteBiometria ? `Excluir as referências de ${usuario.display_name}?` : `Excluir ${usuario.display_name}, suas referências e desvincular o histórico?`)) return;
+        definirProcessando(true);
+        definirErro('');
+        definirAviso('');
         try {
-            await api(`/users/${user.subject_id}${biometricsOnly ? '/biometrics' : ''}`, 'DELETE');
-            setNotice(biometricsOnly ? 'Referências excluídas.' : 'Usuário excluído. Histórico desvinculado.');
-            setPerson(null);
-            await load();
-            onChanged();
-        } catch (e) {
-            setError((e as Error).message);
+            await requisitarApi(`/users/${usuario.subject_id}${somenteBiometria ? '/biometrics' : ''}`, 'DELETE');
+            definirAviso(somenteBiometria ? 'Referências excluídas.' : 'Usuário excluído. Histórico desvinculado.');
+            definirPessoa(null);
+            await carregar();
+            aoAlterar();
+        } catch (evento) {
+            definirErro((evento as Error).message);
         } finally {
-            setBusy(false);
+            definirProcessando(false);
         }
     }
 
-    async function importLegacy() {
+    async function importarLegado() {
         if (!window.confirm('Importar os cadastros consentidos do laboratório para o painel? Após a gravação, as referências serão removidas da galeria antiga. Encerre antes as janelas do laboratório.')) return;
-        setBusy(true);
-        setError('');
-        setNotice('');
+        definirProcessando(true);
+        definirErro('');
+        definirAviso('');
         try {
-            const result = await api<{ imported: number; already_present: number }>('/legacy/import', 'POST');
-            setNotice(`${result.imported} cadastro(s) importado(s). ${result.already_present} já importado(s).`);
-            await load();
-            onChanged();
-        } catch (e) {
-            setError((e as Error).message);
+            const resultado = await requisitarApi<{ imported: number; already_present: number }>('/legacy/import', 'POST');
+            definirAviso(`${resultado.imported} cadastro(s) importado(s). ${resultado.already_present} já importado(s).`);
+            await carregar();
+            aoAlterar();
+        } catch (evento) {
+            definirErro((evento as Error).message);
         } finally {
-            setBusy(false);
+            definirProcessando(false);
         }
     }
 
-    if (enrolling) return <Camera key={enrolling.subject_id} person={enrolling} onCancel={() => setEnrolling(null)}
+    if (pessoaEmCadastro) return <Camera key={pessoaEmCadastro.subject_id} person={pessoaEmCadastro} onCancel={() => definirPessoaEmCadastro(null)}
                                   onSaved={() => {
-                                      setEnrolling(null);
-                                      setNotice('Referências biométricas salvas.');
-                                      void load();
-                                      onChanged();
+                                      definirPessoaEmCadastro(null);
+                                      definirAviso('Referências biométricas salvas.');
+                                      void carregar();
+                                      aoAlterar();
                                   }}/>;
 
     return <>
@@ -88,26 +88,26 @@ export function Users({onChanged}: Props) {
             <div><h2>Usuários autorizados</h2><p className="muted">Identidade, nível de segurança e divisões
                 permitidas.</p></div>
             <div className="actions">
-                <button onClick={importLegacy} disabled={busy} className="secondary"><Download size={16}/> Importar
+                <button onClick={importarLegado} disabled={processando} className="secondary"><Download size={16}/> Importar
                     laboratório
                 </button>
                 <button className="primary" onClick={() => {
-                    setPerson({...blank});
-                    setEditing(false);
-                    setError('');
+                    definirPessoa({...cadastroVazio});
+                    definirEditando(false);
+                    definirErro('');
                 }}><Plus size={18}/> Novo usuário
                 </button>
             </div>
         </div>
-        {error && <p className="error" role="alert">{error}</p>}{notice &&
-        <p className="success" role="status">{notice}</p>}
-        {person && <UserForm key={editing ? person.subject_id : 'new'} person={person} editing={editing}
-                             onCancel={() => setPerson(null)} onSaved={async user => {
-            setPerson(null);
-            setNotice('Usuário salvo.');
-            await load();
-            onChanged();
-            if (!editing) setEnrolling(user);
+        {erro && <p className="error" role="alert">{erro}</p>}{aviso &&
+        <p className="success" role="status">{aviso}</p>}
+        {pessoa && <FormularioUsuario key={editando ? pessoa.subject_id : 'new'} person={pessoa} editing={editando}
+                             onCancel={() => definirPessoa(null)} onSaved={async usuario => {
+            definirPessoa(null);
+            definirAviso('Usuário salvo.');
+            await carregar();
+            aoAlterar();
+            if (!editando) definirPessoaEmCadastro(usuario);
         }}/>}
         <div className="table-wrap">
             <table>
@@ -121,121 +121,121 @@ export function Users({onChanged}: Props) {
                     <th>Ações</th>
                 </tr>
                 </thead>
-                <tbody>{page.items.map(user => <tr key={user.subject_id}>
-                    <td><strong>{user.display_name}</strong><small>{user.subject_id}</small></td>
-                    <td>Nível {user.level}</td>
-                    <td>{user.level === 3 ? 'Todas' : user.divisions.join(', ') || 'Acesso geral'}</td>
-                    <td>{user.sample_count ? `${user.sample_count} referências` :
+                <tbody>{pagina.items.map(usuario => <tr key={usuario.subject_id}>
+                    <td><strong>{usuario.display_name}</strong><small>{usuario.subject_id}</small></td>
+                    <td>Nível {usuario.level}</td>
+                    <td>{usuario.level === 3 ? 'Todas' : usuario.divisions.join(', ') || 'Acesso geral'}</td>
+                    <td>{usuario.sample_count ? `${usuario.sample_count} referências` :
                         <span className="muted">Não cadastrada</span>}</td>
                     <td><span
-                        className={`badge ${user.active ? 'positive' : ''}`}>{user.active ? 'Ativo' : 'Inativo'}</span>
+                        className={`badge ${usuario.active ? 'positive' : ''}`}>{usuario.active ? 'Ativo' : 'Inativo'}</span>
                     </td>
                     <td>
                         <div className="row-actions">
-                            <button className="quiet" disabled={busy} onClick={() => {
-                                setPerson(user);
-                                setEditing(true);
+                            <button className="quiet" disabled={processando} onClick={() => {
+                                definirPessoa(usuario);
+                                definirEditando(true);
                             }}>Editar
                             </button>
-                            <button className="quiet" disabled={busy} onClick={() => setEnrolling(user)}
-                                    aria-label={`Cadastrar rosto de ${user.display_name}`}><ScanFace size={18}/>
+                            <button className="quiet" disabled={processando} onClick={() => definirPessoaEmCadastro(usuario)}
+                                    aria-label={`Cadastrar rosto de ${usuario.display_name}`}><ScanFace size={18}/>
                             </button>
-                            <button className="quiet danger" disabled={busy} onClick={() => remove(user)}
-                                    aria-label={`Excluir ${user.display_name}`}><Trash2 size={17}/></button>
-                            {user.sample_count > 0 &&
-                                <button className="quiet" disabled={busy} onClick={() => remove(user, true)}>Excluir
+                            <button className="quiet danger" disabled={processando} onClick={() => excluir(usuario)}
+                                    aria-label={`Excluir ${usuario.display_name}`}><Trash2 size={17}/></button>
+                            {usuario.sample_count > 0 &&
+                                <button className="quiet" disabled={processando} onClick={() => excluir(usuario, true)}>Excluir
                                     biometria</button>}</div>
                     </td>
                 </tr>)}</tbody>
             </table>
-            {!page.items.length && <div className="empty-state"><ScanFace size={32}/>
-                <h3>{loading ? 'Carregando usuários…' : 'Nenhum usuário nesta página'}</h3><p>Cadastre um voluntário ou
+            {!pagina.items.length && <div className="empty-state"><ScanFace size={32}/>
+                <h3>{carregando ? 'Carregando usuários…' : 'Nenhum usuário nesta página'}</h3><p>Cadastre um voluntário ou
                     importe os registros do laboratório.</p></div>}
         </div>
-        <div className="pagination"><span>{page.total} usuário(s)</span>
+        <div className="pagination"><span>{pagina.total} usuário(s)</span>
             <div className="actions">
-                <button className="secondary" disabled={offset === 0 || loading}
-                        onClick={() => setOffset(Math.max(0, offset - 20))}>Anterior
+                <button className="secondary" disabled={deslocamento === 0 || carregando}
+                        onClick={() => definirDeslocamento(Math.max(0, deslocamento - 20))}>Anterior
                 </button>
-                <button className="secondary" disabled={offset + 20 >= page.total || loading}
-                        onClick={() => setOffset(offset + 20)}>Próxima
+                <button className="secondary" disabled={deslocamento + 20 >= pagina.total || carregando}
+                        onClick={() => definirDeslocamento(deslocamento + 20)}>Próxima
                 </button>
             </div>
         </div>
     </>;
 }
 
-function UserForm({person, editing, onCancel, onSaved}: {
+function FormularioUsuario({person: pessoa, editing: editando, onCancel: aoCancelar, onSaved: aoSalvar}: {
     person: Person;
     editing: boolean;
     onCancel: () => void;
-    onSaved: (user: Person) => void
+    onSaved: (usuario: Person) => void
 }) {
-    const [form, setForm] = useState(person);
-    const [divisions, setDivisions] = useState(person.divisions.join(', '));
-    const [error, setError] = useState('');
-    const [busy, setBusy] = useState(false);
+    const [formulario, definirFormulario] = useState(pessoa);
+    const [divisoes, definirDivisoes] = useState(pessoa.divisions.join(', '));
+    const [erro, definirErro] = useState('');
+    const [processando, definirProcessando] = useState(false);
 
-    async function save(e: React.FormEvent) {
-        e.preventDefault();
-        setError('');
-        setBusy(true);
-        const allowed = form.level === 2 ? divisions.split(',').map(value => value.trim()).filter(Boolean) : [];
-        if (form.level === 2 && !allowed.length) {
-            setError('Informe pelo menos uma divisão para o diretor.');
-            setBusy(false);
+    async function salvar(evento: React.FormEvent) {
+        evento.preventDefault();
+        definirErro('');
+        definirProcessando(true);
+        const divisoesPermitidas = formulario.level === 2 ? divisoes.split(',').map(valor => valor.trim()).filter(Boolean) : [];
+        if (formulario.level === 2 && !divisoesPermitidas.length) {
+            definirErro('Informe pelo menos uma divisão para o diretor.');
+            definirProcessando(false);
             return;
         }
         try {
-            const values = {
-                display_name: form.display_name.trim(),
-                level: form.level,
-                divisions: allowed,
-                active: form.active
+            const dados = {
+                display_name: formulario.display_name.trim(),
+                level: formulario.level,
+                divisions: divisoesPermitidas,
+                active: formulario.active
             };
-            const user = await api<Person>(editing ? `/users/${form.subject_id}` : '/users', editing ? 'PUT' : 'POST', editing ? values : {
-                ...values,
-                subject_id: form.subject_id.trim()
+            const usuario = await requisitarApi<Person>(editando ? `/users/${formulario.subject_id}` : '/users', editando ? 'PUT' : 'POST', editando ? dados : {
+                ...dados,
+                subject_id: formulario.subject_id.trim()
             });
-            onSaved(user);
-        } catch (e) {
-            setError((e as Error).message);
+            aoSalvar(usuario);
+        } catch (evento) {
+            definirErro((evento as Error).message);
         } finally {
-            setBusy(false);
+            definirProcessando(false);
         }
     }
 
-    return <form className="user-form" onSubmit={save}>
-        <div className="section-heading"><h3>{editing ? 'Editar usuário' : 'Novo usuário'}</h3>
-            <button type="button" className="quiet" disabled={busy} onClick={onCancel} aria-label="Fechar formulário"><X
+    return <form className="user-form" onSubmit={salvar}>
+        <div className="section-heading"><h3>{editando ? 'Editar usuário' : 'Novo usuário'}</h3>
+            <button type="button" className="quiet" disabled={processando} onClick={aoCancelar} aria-label="Fechar formulário"><X
                 size={20}/></button>
         </div>
         <div className="form-grid"><label>Identificador fictício<input required pattern="[a-zA-Z0-9_-]{1,40}"
-                                                                       maxLength={40} readOnly={editing}
-                                                                       value={form.subject_id} onChange={e => setForm({
-            ...form,
-            subject_id: e.target.value
+                                                                       maxLength={40} readOnly={editando}
+                                                                       value={formulario.subject_id} onChange={evento => definirFormulario({
+            ...formulario,
+            subject_id: evento.target.value
         })} placeholder="voluntario01"/></label>
-            <label>Nome de exibição<input required maxLength={100} value={form.display_name}
-                                          onChange={e => setForm({...form, display_name: e.target.value})}/></label>
-            <label>Nível<select value={form.level} onChange={e => setForm({...form, level: Number(e.target.value)})}>
+            <label>Nome de exibição<input required maxLength={100} value={formulario.display_name}
+                                          onChange={evento => definirFormulario({...formulario, display_name: evento.target.value})}/></label>
+            <label>Nível<select value={formulario.level} onChange={evento => definirFormulario({...formulario, level: Number(evento.target.value)})}>
                 <option value="1">1 — Acesso geral</option>
                 <option value="2">2 — Diretor</option>
                 <option value="3">3 — Ministro</option>
             </select></label>
-            {form.level === 2 && <label>Divisões autorizadas<input required value={divisions}
-                                                                   onChange={e => setDivisions(e.target.value)}
+            {formulario.level === 2 && <label>Divisões autorizadas<input required value={divisoes}
+                                                                   onChange={evento => definirDivisoes(evento.target.value)}
                                                                    placeholder="florestas, aguas"/><small>Separe as
                 divisões por vírgula; use os mesmos nomes no terminal.</small></label>}
         </div>
-        <label className="check"><input type="checkbox" checked={form.active}
-                                        onChange={e => setForm({...form, active: e.target.checked})}/> Usuário
+        <label className="check"><input type="checkbox" checked={formulario.active}
+                                        onChange={evento => definirFormulario({...formulario, active: evento.target.checked})}/> Usuário
             ativo</label>
-        {error && <p className="error" role="alert">{error}</p>}
+        {erro && <p className="error" role="alert">{erro}</p>}
         <div className="actions">
             <button className="primary"
-                    disabled={busy}>{busy ? 'Salvando…' : editing ? 'Salvar alterações' : 'Salvar e cadastrar rosto'}</button>
-            <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancelar</button>
+                    disabled={processando}>{processando ? 'Salvando…' : editando ? 'Salvar alterações' : 'Salvar e cadastrar rosto'}</button>
+            <button type="button" className="secondary" disabled={processando} onClick={aoCancelar}>Cancelar</button>
         </div>
     </form>;
 }

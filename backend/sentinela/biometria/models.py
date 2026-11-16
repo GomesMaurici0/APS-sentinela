@@ -26,54 +26,57 @@ MODELS = {
 }
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def calcular_sha256(caminho: Path) -> str:
+    resumo_hash = hashlib.sha256()
+    with caminho.open("rb") as origem_dados:
+        for bloco in iter(lambda: origem_dados.read(1024 * 1024), b""):
+            resumo_hash.update(bloco)
+    return resumo_hash.hexdigest()
 
 
-def validate_models(directory: Path) -> dict[str, Path]:
-    paths = {}
-    for name, spec in MODELS.items():
-        path = directory / spec["file"]
-        if not path.is_file():
+def validar_modelos(diretorio: Path) -> dict[str, Path]:
+    caminhos = {}
+    for nome, especificacao in MODELS.items():
+        caminho = diretorio / especificacao["file"]
+        if not caminho.is_file():
             raise ValueError("Modelo ausente. Execute: sentinela download-models")
-        if path.stat().st_size != spec["size"] or sha256(path) != spec["sha256"]:
-            raise ValueError(f"Checksum inválido para o modelo {name}.")
-        paths[name] = path
-    return paths
+        if (
+            caminho.stat().st_size != especificacao["size"]
+            or calcular_sha256(caminho) != especificacao["sha256"]
+        ):
+            raise ValueError(f"Checksum inválido para o modelo {nome}.")
+        caminhos[nome] = caminho
+    return caminhos
 
 
-def download_models(directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    for name, spec in MODELS.items():
-        target = directory / spec["file"]
-        if target.exists() and sha256(target) == spec["sha256"]:
+def baixar_modelos(diretorio: Path) -> None:
+    diretorio.mkdir(parents=True, exist_ok=True)
+    for nome, especificacao in MODELS.items():
+        destino = diretorio / especificacao["file"]
+        if destino.exists() and calcular_sha256(destino) == especificacao["sha256"]:
             continue
         url = (
             f"https://media.githubusercontent.com/media/opencv/opencv_zoo/{REVISION}"
-            f"/models/{spec['directory']}/{spec['file']}"
+            f"/models/{especificacao['directory']}/{especificacao['file']}"
         )
-        temporary = None
+        temporario = None
         try:
-            with tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
-                temporary = Path(output.name)
-                with urllib.request.urlopen(url, timeout=60) as response:
-                    remaining = spec["size"]
-                    while block := response.read(min(1024 * 1024, remaining + 1)):
-                        remaining -= len(block)
-                        if remaining < 0:
-                            raise ValueError(f"Tamanho inesperado para {name}.")
-                        output.write(block)
-            if sha256(temporary) != spec["sha256"]:
-                raise ValueError(f"Download de {name} não corresponde ao checksum oficial.")
-            os.replace(temporary, target)
+            with tempfile.NamedTemporaryFile(dir=diretorio, delete=False) as saida:
+                temporario = Path(saida.name)
+                with urllib.request.urlopen(url, timeout=60) as resposta:
+                    restante = especificacao["size"]
+                    while bloco := resposta.read(min(1024 * 1024, restante + 1)):
+                        restante -= len(bloco)
+                        if restante < 0:
+                            raise ValueError(f"Tamanho inesperado para {nome}.")
+                        saida.write(bloco)
+            if calcular_sha256(temporario) != especificacao["sha256"]:
+                raise ValueError(f"Download de {nome} não corresponde ao checksum oficial.")
+            os.replace(temporario, destino)
         finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-    validate_models(directory)
-    (directory / "manifest.json").write_text(
+            if temporario is not None:
+                temporario.unlink(missing_ok=True)
+    validar_modelos(diretorio)
+    (diretorio / "manifest.json").write_text(
         json.dumps({"revision": REVISION, "models": MODELS}, indent=2) + "\n", encoding="utf-8"
     )

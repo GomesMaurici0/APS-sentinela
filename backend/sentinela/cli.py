@@ -11,80 +11,84 @@ from time import monotonic
 import cv2
 import numpy as np
 
-from sentinela.autorizacao import UserPermission, authorize
-from sentinela.biometria.matching import MatchStatus, identify
-from sentinela.biometria.models import DEFAULT_MODELS, download_models, validate_models
+from sentinela.autorizacao import UserPermission, autorizar
+from sentinela.biometria.matching import MatchStatus, identificar
+from sentinela.biometria.models import DEFAULT_MODELS, baixar_modelos, validar_modelos
 from sentinela.biometria.pipeline import CaptureStatus, FacePipeline
-from sentinela.config import BiometricConfig, data_directory
+from sentinela.config import BiometricConfig, diretorio_dados
 from sentinela.galeria import MINIMUM_SAMPLES, Gallery
 
 
-def camera(args, pipeline: FacePipeline, gallery: Gallery):
-    permission = None
-    if args.enroll:
-        if not args.consent:
+def executar_camera(argumentos, motor_facial: FacePipeline, galeria: Gallery):
+    permissao = None
+    if argumentos.enroll:
+        if not argumentos.consent:
             raise ValueError("Cadastro exige --consent, após consentimento livre do voluntário.")
-        permission = UserPermission(args.level, frozenset(args.division))
-        if args.enroll in gallery.read()["subjects"]:
+        permissao = UserPermission(argumentos.level, frozenset(argumentos.division))
+        if argumentos.enroll in galeria.ler()["subjects"]:
             raise ValueError("Identificador já cadastrado. Exclua antes de recadastrar.")
         print("Consentimento laboratorio-v1: processamento local de referências faciais para APS.")
         print("Sem salvar fotografias. Referências criptografadas, sem garantia de vivacidade.")
         print("Retirada/exclusão: sentinela delete IDENTIFICADOR. Não use nome real.")
         if input("O voluntário concorda? Digite CONSINTO: ").strip() != "CONSINTO":
             raise ValueError("Cadastro cancelado: consentimento não confirmado.")
-    elif args.consent:
+    elif argumentos.consent:
         raise ValueError("--consent é usado somente com --enroll.")
 
-    records = gallery.read()["subjects"]
-    references = {
-        key: [np.asarray(vector, np.float32) for vector in record["samples"]]
-        for key, record in records.items()
-        if record["active"]
+    registros = galeria.ler()["subjects"]
+    referencias = {
+        chave: [np.asarray(vetor, np.float32) for vetor in registro["samples"]]
+        for chave, registro in registros.items()
+        if registro["active"]
     }
-    capture = cv2.VideoCapture(args.device)
+    captura = cv2.VideoCapture(argumentos.device)
     try:
-        if not capture.isOpened():
+        if not captura.isOpened():
             raise ValueError(
                 "Câmera indisponível. Verifique permissão, índice e outros aplicativos."
             )
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        print("Janela local: ESPAÇO coleta amostra; ESC ou Q encerra. Nenhuma imagem é salva.")
-        samples = []
-        last_sample = -float("inf")
+        captura.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        print("Janela local: ESPAÇO coleta amostra; ESC ou Q encerra. Nenhuma image m é salva.")
+        amostras = []
+        ultima_amostra = -float("inf")
         while True:
-            ok, frame = capture.read()
-            if not ok:
+            sucesso, quadro = captura.read()
+            if not sucesso:
                 raise ValueError("Falha de aquisição. Câmera desconectada ou ocupada.")
-            result = pipeline.analyze(frame)
-            view = result.frame.copy() if result.frame is not None else frame.copy()
-            label = result.status.value
-            color = (60, 190, 240)
-            if args.enroll:
-                label += f" | amostras {len(samples)}/{MINIMUM_SAMPLES} | ESPACO captura"
-            elif result.status == CaptureStatus.OK:
-                match = identify(result.embedding, references, pipeline.config)
-                label = match.status.value
-                if match.similarity is not None:
-                    label += f" | sim {match.similarity:.3f}"
-                if match.status == MatchStatus.MATCHED:
-                    record = records[match.subject_id]
-                    user = UserPermission(
-                        record["level"], frozenset(record["divisions"]), record["active"]
+            resultado = motor_facial.analisar(quadro)
+            visualizacao = resultado.frame.copy() if resultado.frame is not None else quadro.copy()
+            rotulo = resultado.status.value
+            cor = (60, 190, 240)
+            if argumentos.enroll:
+                rotulo += f" | amostras {len(amostras)}/{MINIMUM_SAMPLES} | ESPACO captura"
+            elif resultado.status == CaptureStatus.OK:
+                identificacao = identificar(resultado.embedding, referencias, motor_facial.config)
+                rotulo = identificacao.status.value
+                if identificacao.similarity is not None:
+                    rotulo += f" | sim {identificacao.similarity:.3f}"
+                if identificacao.status == MatchStatus.MATCHED:
+                    registro = registros[identificacao.subject_id]
+                    usuario = UserPermission(
+                        registro["level"], frozenset(registro["divisions"]), registro["active"]
                     )
-                    decision = authorize(user, args.access_level, args.access_division)
-                    label = f"{match.subject_id} | {decision.reason}"
-                    color = (90, 210, 90) if decision.granted else (70, 70, 240)
+                    decisao = autorizar(
+                        usuario, argumentos.access_level, argumentos.access_division
+                    )
+                    rotulo = f"{identificacao.subject_id} | {decisao.reason}"
+                    cor = (90, 210, 90) if decisao.granted else (70, 70, 240)
                 else:
-                    color = (70, 70, 240)
-            if result.faces is not None:
-                for face in result.faces:
-                    x, y, width, height = map(int, face[:4])
-                    cv2.rectangle(view, (x, y), (x + width, y + height), color, 2)
-                    for index in range(4, 14, 2):
-                        cv2.circle(view, tuple(map(int, face[index : index + 2])), 2, color, -1)
+                    cor = (70, 70, 240)
+            if resultado.faces is not None:
+                for rosto in resultado.faces:
+                    x, y, largura, altura = map(int, rosto[:4])
+                    cv2.rectangle(visualizacao, (x, y), (x + largura, y + altura), cor, 2)
+                    for indice in range(4, 14, 2):
+                        cv2.circle(
+                            visualizacao, tuple(map(int, rosto[indice : indice + 2])), 2, cor, -1
+                        )
             cv2.putText(
-                view,
+                visualizacao,
                 "SENTINELA | LABORATORIO SEM AUDITORIA",
                 (10, 23),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -92,129 +96,145 @@ def camera(args, pipeline: FacePipeline, gallery: Gallery):
                 (230, 230, 230),
                 1,
             )
-            cv2.putText(view, label, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-            metrics = f"{result.elapsed_ms:.0f} ms | ESC encerra"
-            if result.brightness is not None:
-                metrics += f" | luz {result.brightness:.0f} | nitidez {result.sharpness:.0f}"
-            cv2.putText(view, metrics, (10, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1)
-            if result.aligned is not None:
+            cv2.putText(visualizacao, rotulo, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, cor, 1)
+            metricas = f"{resultado.elapsed_ms:.0f} ms | ESC encerra"
+            if resultado.brightness is not None:
+                metricas += f" | luz {resultado.brightness:.0f} | nitidez {resultado.sharpness:.0f}"
+            cv2.putText(
+                visualizacao, metricas, (10, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1
+            )
+            if resultado.aligned is not None:
                 # Recorte permanece apenas na memória/janela e desaparece na captura seguinte.
-                crop = cv2.resize(result.aligned, (112, 112))
-                if view.shape[0] >= 112 and view.shape[1] >= 112:
-                    view[-112:, -112:] = crop
-            cv2.imshow("SENTINELA - laboratorio", view)
-            key = cv2.waitKey(1) & 0xFF
-            if key in (27, ord("q")):
+                recorte = cv2.resize(resultado.aligned, (112, 112))
+                if visualizacao.shape[0] >= 112 and visualizacao.shape[1] >= 112:
+                    visualizacao[-112:, -112:] = recorte
+            cv2.imshow("SENTINELA - laboratorio", visualizacao)
+            chave = cv2.waitKey(1) & 0xFF
+            if chave in (27, ord("q")):
                 break
             if cv2.getWindowProperty("SENTINELA - laboratorio", cv2.WND_PROP_VISIBLE) < 1:
                 break
-            if args.enroll and key == 32 and result.status == CaptureStatus.OK:
-                if monotonic() - last_sample < 0.8:
+            if argumentos.enroll and chave == 32 and resultado.status == CaptureStatus.OK:
+                if monotonic() - ultima_amostra < 0.8:
                     continue
-                samples.append(result.embedding.copy())
-                last_sample = monotonic()
-                if len(samples) == MINIMUM_SAMPLES:
-                    gallery.enroll(args.enroll, permission, samples, consent=True)
+                amostras.append(resultado.embedding.copy())
+                ultima_amostra = monotonic()
+                if len(amostras) == MINIMUM_SAMPLES:
+                    galeria.cadastrar_biometria(
+                        argumentos.enroll, permissao, amostras, consent=True
+                    )
                     print("Cadastro experimental salvo. Nenhuma fotografia foi persistida.")
                     break
     finally:
-        capture.release()
+        captura.release()
         cv2.destroyAllWindows()
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="SENTINELA — laboratório biométrico local")
-    sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("download-models", "doctor", "camera", "delete", "serve"):
-        child = sub.add_parser(command)
-        if command != "delete":
+def principal(argumentos_cli=None) -> int:
+    analisador_argumentos = argparse.ArgumentParser(
+        description="SENTINELA — laboratório biométrico local"
+    )
+    subcomandos = analisador_argumentos.add_subparsers(dest="command", required=True)
+    for comando in ("download-models", "doctor", "camera", "delete", "serve"):
+        subcomando = subcomandos.add_parser(comando)
+        if comando != "delete":
             from pathlib import Path
 
-            child.add_argument("--models", type=Path, default=DEFAULT_MODELS)
-        if command == "delete":
-            child.add_argument("subject")
-        if command == "serve":
-            child.add_argument("--port", type=int, default=8000)
-        if command == "camera":
-            child.add_argument("--device", type=int, default=0)
-            child.add_argument("--enroll", metavar="IDENTIFICADOR")
-            child.add_argument("--consent", action="store_true")
-            child.add_argument("--level", type=int, choices=(1, 2, 3), default=1)
-            child.add_argument("--division", action="append", default=[])
-            child.add_argument("--access-level", type=int, choices=(1, 2, 3), default=1)
-            child.add_argument("--access-division")
-            child.add_argument("--threshold", type=float, default=0.45)
-            child.add_argument("--margin", type=float, default=0.08)
-    args = parser.parse_args(argv)
+            subcomando.add_argument("--models", type=Path, default=DEFAULT_MODELS)
+        if comando == "delete":
+            subcomando.add_argument("subject")
+        if comando == "serve":
+            subcomando.add_argument("--port", type=int, default=8000)
+        if comando == "camera":
+            subcomando.add_argument("--device", type=int, default=0)
+            subcomando.add_argument("--enroll", metavar="IDENTIFICADOR")
+            subcomando.add_argument("--consent", action="store_true")
+            subcomando.add_argument("--level", type=int, choices=(1, 2, 3), default=1)
+            subcomando.add_argument("--division", action="append", default=[])
+            subcomando.add_argument("--access-level", type=int, choices=(1, 2, 3), default=1)
+            subcomando.add_argument("--access-division")
+            subcomando.add_argument("--threshold", type=float, default=0.45)
+            subcomando.add_argument("--margin", type=float, default=0.08)
+    argumentos = analisador_argumentos.parse_args(argumentos_cli)
     try:
-        if args.command == "serve":
+        if argumentos.command == "serve":
             import uvicorn
 
-            from sentinela.api import create_app
+            from sentinela.api import criar_aplicacao
 
-            if not 1 <= args.port <= 65535:
+            if not 1 <= argumentos.port <= 65535:
                 raise ValueError("Porta inválida.")
-            print(f"Abra http://127.0.0.1:{args.port} no navegador. Ctrl+C encerra.")
+            print(f"Abra http://127.0.0.1:{argumentos.port} no navegador. Ctrl+C encerra.")
             uvicorn.run(
-                create_app(models=args.models),
+                criar_aplicacao(models=argumentos.models),
                 host="127.0.0.1",
-                port=args.port,
+                port=argumentos.port,
                 workers=1,
                 access_log=False,
                 proxy_headers=False,
             )
-        elif args.command == "download-models":
-            download_models(args.models)
+        elif argumentos.command == "download-models":
+            baixar_modelos(argumentos.models)
             print("Modelos disponíveis e checksums verificados.")
-        elif args.command == "doctor":
-            validate_models(args.models)
-            pipeline = FacePipeline(args.models)
-            result = pipeline.analyze(np.zeros((480, 640, 3), dtype=np.uint8))
+        elif argumentos.command == "doctor":
+            validar_modelos(argumentos.models)
+            motor_facial = FacePipeline(argumentos.models)
+            resultado = motor_facial.analisar(np.zeros((480, 640, 3), dtype=np.uint8))
             print(
                 json.dumps(
                     {
                         "python": sys.version.split()[0],
                         "opencv": cv2.__version__,
                         "models": "sha256_ok",
-                        "synthetic_frame": result.status,
-                        "elapsed_ms": round(result.elapsed_ms, 2),
-                        "config": asdict(pipeline.config),
+                        "synthetic_frame": resultado.status,
+                        "elapsed_ms": round(resultado.elapsed_ms, 2),
+                        "config": asdict(motor_facial.config),
                     },
                     ensure_ascii=False,
                     indent=2,
                 )
             )
-        elif args.command == "delete":
-            Gallery(data_directory()).delete(args.subject)
+        elif argumentos.command == "delete":
+            Gallery(diretorio_dados()).excluir(argumentos.subject)
             print(
                 "Referências excluídas da galeria ativa. Backups externos exigem exclusão própria."
             )
-        elif args.command == "camera":
+        elif argumentos.command == "camera":
             if (
-                authorize(UserPermission(3), args.access_level, args.access_division).reason
+                autorizar(
+                    UserPermission(3), argumentos.access_level, argumentos.access_division
+                ).reason
                 == "recurso_invalido"
             ):
                 raise ValueError(
                     "Informe divisão somente para acesso ao nível 2, onde é obrigatória."
                 )
-            config = BiometricConfig(
-                similarity_threshold=args.threshold, ambiguity_margin=args.margin
+            configuracao = BiometricConfig(
+                similarity_threshold=argumentos.threshold, ambiguity_margin=argumentos.margin
             )
-            camera(args, FacePipeline(args.models, config), Gallery(data_directory()))
+            executar_camera(
+                argumentos,
+                FacePipeline(argumentos.models, configuracao),
+                Gallery(diretorio_dados()),
+            )
         return 0
-    except (ValueError, OSError, sqlite3.Error, cv2.error, urllib.error.URLError) as error:
+    except (ValueError, OSError, sqlite3.Error, cv2.error, urllib.error.URLError) as erro:
         # Não imprimir mensagens OpenCV/SQLite que possam conter dados internos.
-        message = (
-            str(error)
-            if isinstance(error, ValueError)
+        mensagem = (
+            str(erro)
+            if isinstance(erro, ValueError)
             else "Falha operacional. Verifique ambiente e arquivos."
         )
-        print(f"Erro: {message}", file=sys.stderr)
+        print(f"Erro: {mensagem}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("Operação interrompida.", file=sys.stderr)
         return 130
 
 
+# Compatibilidade com atalhos de console instalados antes da refatoração.
+main = principal
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(principal())

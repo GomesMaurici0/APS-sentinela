@@ -11,144 +11,154 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from sentinela.autorizacao import UserPermission
 from sentinela.biometria.models import MODEL_ID
-from sentinela.biometria.pipeline import normalized_embedding
+from sentinela.biometria.pipeline import normalizar_vetor_facial
 from sentinela.errors import DomainError
 
 
-def now() -> str:
+def agora() -> str:
     return datetime.now(UTC).isoformat()
 
 
 class Database:
-    def __init__(self, directory: Path):
-        self.directory = directory
-        self.path = directory / "sentinela.db"
-        self.key_path = directory / "biometrics.key"
+    def __init__(self, diretorio: Path):
+        self.directory = diretorio
+        self.path = diretorio / "sentinela.db"
+        self.key_path = diretorio / "biometrics.key"
         self._key_lock = threading.Lock()
 
     @contextmanager
-    def connect(self, write=False):
-        connection = sqlite3.connect(self.path, timeout=5)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA secure_delete=ON")
+    def conectar(self, write=False):
+        conexao = sqlite3.connect(self.path, timeout=5)
+        conexao.row_factory = sqlite3.Row
+        conexao.execute("PRAGMA foreign_keys=ON")
+        conexao.execute("PRAGMA secure_delete=ON")
         try:
             if write:
-                connection.execute("BEGIN IMMEDIATE")
-            yield connection
-            connection.commit()
+                conexao.execute("BEGIN IMMEDIATE")
+            yield conexao
+            conexao.commit()
         except BaseException:
-            connection.rollback()
+            conexao.rollback()
             raise
         finally:
-            connection.close()
+            conexao.close()
 
-    def initialize(self):
+    def inicializar(self):
         self.directory.mkdir(parents=True, exist_ok=True)
-        with self.connect() as connection:
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version > 2:
+        with self.conectar() as conexao:
+            versao = conexao.execute("PRAGMA user_version").fetchone()[0]
+            if versao > 2:
                 raise ValueError("Banco foi criado por uma versão mais recente do sistema.")
-            if version == 0:
-                migration = Path(__file__).parent / "migrations" / "001_initial.sql"
-                connection.executescript("BEGIN IMMEDIATE;\n" + migration.read_text("utf-8"))
-            if version < 2:
-                migration = Path(__file__).parent / "migrations" / "002_remove_admin_auth.sql"
-                connection.executescript("BEGIN IMMEDIATE;\n" + migration.read_text("utf-8"))
+            if versao == 0:
+                migracao = Path(__file__).parent / "migrations" / "001_initial.sql"
+                conexao.executescript("BEGIN IMMEDIATE;\n" + migracao.read_text("utf-8"))
+            if versao < 2:
+                migracao = Path(__file__).parent / "migrations" / "002_remove_admin_auth.sql"
+                conexao.executescript("BEGIN IMMEDIATE;\n" + migracao.read_text("utf-8"))
 
-    def cipher(self) -> Fernet:
+    def cifrador(self) -> Fernet:
         with self._key_lock:
             if not self.key_path.exists():
-                with self.connect() as connection:
-                    count = connection.execute(
+                with self.conectar() as conexao:
+                    quantidade = conexao.execute(
                         "SELECT COUNT(*) FROM biometric_references"
                     ).fetchone()[0]
-                if count:
+                if quantidade:
                     raise DomainError(503, "Chave biométrica ausente. Operação interrompida.")
                 try:
-                    descriptor = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    descritor = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 except FileExistsError:
                     pass
                 else:
-                    with os.fdopen(descriptor, "wb") as output:
-                        output.write(Fernet.generate_key())
+                    with os.fdopen(descritor, "wb") as saida:
+                        saida.write(Fernet.generate_key())
             try:
                 return Fernet(self.key_path.read_bytes())
-            except (ValueError, OSError) as error:
-                raise DomainError(503, "Chave biométrica indisponível.") from error
+            except (ValueError, OSError) as erro:
+                raise DomainError(503, "Chave biométrica indisponível.") from erro
 
-    def encode_samples(self, samples) -> bytes:
-        vectors = [normalized_embedding(sample).tolist() for sample in samples]
-        return self.cipher().encrypt(json.dumps(vectors, allow_nan=False).encode())
+    def cifrar_amostras(self, amostras) -> bytes:
+        vetores = [normalizar_vetor_facial(amostra).tolist() for amostra in amostras]
+        return self.cifrador().encrypt(json.dumps(vetores, allow_nan=False).encode())
 
-    def references(self, connection) -> dict[str, list[np.ndarray]]:
-        rows = connection.execute("SELECT * FROM biometric_references").fetchall()
-        if not rows:
+    def obter_referencias(self, conexao) -> dict[str, list[np.ndarray]]:
+        linhas = conexao.execute("SELECT * FROM biometric_references").fetchall()
+        if not linhas:
             return {}
-        cipher = self.cipher()
-        result = {}
-        for row in rows:
-            if row["model_id"] != MODEL_ID:
+        cifrador = self.cifrador()
+        resultado = {}
+        for linha in linhas:
+            if linha["model_id"] != MODEL_ID:
                 raise DomainError(503, "Referências incompatíveis com o modelo atual.")
             try:
-                vectors = json.loads(cipher.decrypt(row["encrypted_samples"]))
-                if not isinstance(vectors, list) or len(vectors) < 5:
+                vetores = json.loads(cifrador.decrypt(linha["encrypted_samples"]))
+                if not isinstance(vetores, list) or len(vetores) < 5:
                     raise ValueError("Referências incompletas")
-                result[row["subject_id"]] = [normalized_embedding(sample) for sample in vectors]
-            except (InvalidToken, ValueError, TypeError) as error:
+                resultado[linha["subject_id"]] = [
+                    normalizar_vetor_facial(amostra) for amostra in vetores
+                ]
+            except (InvalidToken, ValueError, TypeError) as erro:
                 raise DomainError(
                     503, "Referências biométricas inválidas ou chave incorreta."
-                ) from error
-        return result
+                ) from erro
+        return resultado
 
     @staticmethod
-    def user(connection, subject_id: str) -> dict:
-        row = connection.execute("SELECT * FROM users WHERE subject_id=?", (subject_id,)).fetchone()
-        if row is None:
+    def obter_usuario(conexao, identificador: str) -> dict:
+        linha = conexao.execute(
+            "SELECT * FROM users WHERE subject_id=?", (identificador,)
+        ).fetchone()
+        if linha is None:
             raise DomainError(404, "Usuário não encontrado.")
-        value = dict(row)
-        value["active"] = bool(value["active"])
-        value["divisions"] = [
+        valor = dict(linha)
+        valor["active"] = bool(valor["active"])
+        valor["divisions"] = [
             item[0]
-            for item in connection.execute(
+            for item in conexao.execute(
                 "SELECT division FROM user_divisions WHERE subject_id=? ORDER BY division",
-                (subject_id,),
+                (identificador,),
             )
         ]
-        reference = connection.execute(
-            "SELECT sample_count FROM biometric_references WHERE subject_id=?", (subject_id,)
+        referencia = conexao.execute(
+            "SELECT sample_count FROM biometric_references WHERE subject_id=?", (identificador,)
         ).fetchone()
-        value["sample_count"] = reference[0] if reference else 0
-        return value
+        valor["sample_count"] = referencia[0] if referencia else 0
+        return valor
 
     @staticmethod
-    def permission(user: dict) -> UserPermission:
-        return UserPermission(user["level"], frozenset(user["divisions"]), user["active"])
+    def obter_permissao(usuario: dict) -> UserPermission:
+        return UserPermission(
+            usuario["level"], frozenset(usuario["divisions"]), usuario["active"]
+        )
 
     @staticmethod
-    def insert_user(connection, subject_id, display_name, level, active, divisions):
-        stamp = now()
+    def inserir_usuario(conexao, identificador, nome_exibicao, nivel, ativo, divisoes):
+        instante = agora()
         try:
-            connection.execute(
+            conexao.execute(
                 "INSERT INTO users VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
-                (subject_id, display_name, level, int(active), stamp, stamp),
+                (identificador, nome_exibicao, nivel, int(ativo), instante, instante),
             )
-        except sqlite3.IntegrityError as error:
-            raise DomainError(409, "Identificador já cadastrado.") from error
-        connection.executemany(
+        except sqlite3.IntegrityError as erro:
+            raise DomainError(409, "Identificador já cadastrado.") from erro
+        conexao.executemany(
             "INSERT INTO user_divisions VALUES (?, ?)",
-            [(subject_id, division) for division in divisions],
+            [(identificador, divisao) for divisao in divisoes],
         )
 
     @staticmethod
-    def save_samples(
-        connection, subject_id, encrypted, consent_at=None, consent_version="cadastro-v1"
+    def salvar_amostras(
+        conexao,
+        identificador,
+        conteudo_cifrado,
+        data_consentimento=None,
+        versao_consentimento="cadastro-v1",
     ):
-        connection.execute(
+        conexao.execute(
             "INSERT OR REPLACE INTO biometric_references VALUES (?, ?, ?, ?, ?)",
-            (subject_id, MODEL_ID, encrypted, 5, now()),
+            (identificador, MODEL_ID, conteudo_cifrado, 5, agora()),
         )
-        connection.execute(
+        conexao.execute(
             "UPDATE users SET consent_at=?, consent_version=?, updated_at=? WHERE subject_id=?",
-            (consent_at or now(), consent_version, now(), subject_id),
+            (data_consentimento or agora(), versao_consentimento, agora(), identificador),
         )

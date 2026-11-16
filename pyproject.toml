@@ -23,7 +23,7 @@ dev = ["pytest>=8,<10", "ruff>=0.11,<1", "httpx>=0.28,<1"]
 sentinela = ["migrations/*.sql"]
 
 [project.scripts]
-sentinela = "sentinela.cli:main"
+sentinela = "sentinela.cli:principal"
 
 [tool.setuptools.packages.find]
 where = ["backend"]

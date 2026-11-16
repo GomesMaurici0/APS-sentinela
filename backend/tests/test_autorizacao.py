@@ -1,5 +1,5 @@
 import pytest
-from sentinela.autorizacao import UserPermission, authorize
+from sentinela.autorizacao import UserPermission, autorizar
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ from sentinela.autorizacao import UserPermission, authorize
     ],
 )
 def test_policy(user, target, division, granted, reason):
-    result = authorize(user, target, division)
+    result = autorizar(user, target, division)
     assert (result.granted, result.reason) == (granted, reason)
 
 

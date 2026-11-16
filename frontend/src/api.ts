@@ -15,24 +15,24 @@ export type Stats = { users: number; enrolled: number; attempts: number; granted
 export type Page<T> = { items: T[]; total: number; offset: number; limit: number };
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, mensagem: string) { super(mensagem); }
 }
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    method, credentials: 'same-origin',
+export async function requisitarApi<T>(caminho: string, metodo = 'GET', corpo?: unknown): Promise<T> {
+  const resposta = await fetch(`/api${caminho}`, {
+    method: metodo, credentials: 'same-origin',
     headers: {
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(corpo !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: corpo === undefined ? undefined : JSON.stringify(corpo),
   });
-  if (!response.ok) {
-    const value = await response.json().catch(() => ({ detail: 'Não foi possível concluir a operação.' }));
-    throw new ApiError(response.status, typeof value.detail === 'string' ? value.detail : 'Dados inválidos.');
+  if (!resposta.ok) {
+    const valor = await resposta.json().catch(() => ({ detail: 'Não foi possível concluir a operação.' }));
+    throw new ApiError(resposta.status, typeof valor.detail === 'string' ? valor.detail : 'Dados inválidos.');
   }
-  return response.status === 204 ? undefined as T : response.json();
+  return resposta.status === 204 ? undefined as T : resposta.json();
 }
 
-export const reasonLabel: Record<string, string> = {
+export const rotulosMotivos: Record<string, string> = {
   acesso_autorizado: 'Permissão confirmada', nivel_insuficiente: 'Nível de permissão insuficiente',
   divisao_nao_autorizada: 'Divisão não autorizada', usuario_inativo: 'Usuário inativo',
   desconhecido: 'Rosto não reconhecido', ambiguo: 'Identidade ambígua', sem_referencias: 'Sem referências cadastradas',
@@ -42,5 +42,5 @@ export const reasonLabel: Record<string, string> = {
   imagem_desfocada: 'Aguarde o foco da câmera', imagem_invalida: 'Imagem inválida',
   falha_biometrica: 'Falha no processamento biométrico', ok: 'Captura aprovada',
 };
-export function label(reason: string) { return reasonLabel[reason] ?? reason; }
-export function date(value: string) { return new Date(value).toLocaleString('pt-BR'); }
+export function traduzirMotivo(motivo: string) { return rotulosMotivos[motivo] ?? motivo; }
+export function formatarData(valor: string) { return new Date(valor).toLocaleString('pt-BR'); }

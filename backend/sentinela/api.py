@@ -7,10 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from sentinela.access_service import AccessService, attempt_record
+from sentinela.access_service import AccessService, registro_tentativa
 from sentinela.biometria.models import DEFAULT_MODELS
-from sentinela.config import data_directory
-from sentinela.database import Database, now
+from sentinela.config import diretorio_dados
+from sentinela.database import Database, agora
 from sentinela.errors import DomainError
 from sentinela.galeria import Gallery
 from sentinela.schemas import (
@@ -35,47 +35,47 @@ DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 class LocalBoundary:
     """Limites de entrada e cabeçalhos aplicados também às respostas de erro."""
 
-    def __init__(self, app):
-        self.app = app
+    def __init__(self, aplicacao):
+        self.app = aplicacao
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        headers = dict(scope["headers"])
-        method = scope["method"]
-        origin = headers.get(b"origin")
-        host = headers.get(b"host", b"")
-        if origin and origin != scope["scheme"].encode() + b"://" + host:
+        cabecalhos = dict(scope["headers"])
+        metodo = scope["method"]
+        origem = cabecalhos.get(b"origin")
+        host = cabecalhos.get(b"host", b"")
+        if origem and origem != scope["scheme"].encode() + b"://" + host:
             return await JSONResponse({"detail": "Origem não autorizada."}, 403)(
                 scope, receive, send
             )
-        chunks = []
-        size = 0
-        if method in ("POST", "PUT", "PATCH", "DELETE"):
+        partes = []
+        tamanho = 0
+        if metodo in ("POST", "PUT", "PATCH", "DELETE"):
             while True:
-                message = await receive()
-                if message["type"] == "http.disconnect":
+                mensagem = await receive()
+                if mensagem["type"] == "http.disconnect":
                     return
-                size += len(message.get("body", b""))
-                if size > 8 * 1024 * 1024:
+                tamanho += len(mensagem.get("body", b""))
+                if tamanho > 8 * 1024 * 1024:
                     return await JSONResponse({"detail": "Corpo excede 8 MiB."}, 413)(
                         scope, receive, send
                     )
-                chunks.append(message.get("body", b""))
-                if not message.get("more_body", False):
+                partes.append(mensagem.get("body", b""))
+                if not mensagem.get("more_body", False):
                     break
-        delivered = False
+        entregue = False
 
-        async def limited_receive():
-            nonlocal delivered
-            if not delivered and chunks:
-                delivered = True
-                return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
+        async def receber_com_limite():
+            nonlocal entregue
+            if not entregue and partes:
+                entregue = True
+                return {"type": "http.request", "body": b"".join(partes), "more_body": False}
             return await receive()
 
-        async def protected_send(message):
-            if message["type"] == "http.response.start":
-                message["headers"] += [
+        async def enviar_com_protecao(mensagem):
+            if mensagem["type"] == "http.response.start":
+                mensagem["headers"] += [
                     (b"cache-control", b"no-store"),
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
@@ -88,19 +88,19 @@ class LocalBoundary:
                         b"object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
                     ),
                 ]
-            await send(message)
+            await send(mensagem)
 
-        await self.app(scope, limited_receive, protected_send)
+        await self.app(scope, receber_com_limite, enviar_com_protecao)
 
 
-def create_app(
-    directory: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
+def criar_aplicacao(
+    diretorio: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
 ) -> FastAPI:
-    directory = directory or data_directory()
-    database = Database(directory)
-    database.initialize()
-    service = AccessService(database, models, pipeline)
-    app = FastAPI(
+    diretorio = diretorio or diretorio_dados()
+    banco = Database(diretorio)
+    banco.inicializar()
+    servico = AccessService(banco, models, pipeline)
+    aplicacao = FastAPI(
         title="SENTINELA",
         version="0.2.0",
         docs_url=None,
@@ -119,255 +119,331 @@ def create_app(
             503: {"model": ErrorResponse},
         },
     )
-    app.state.database = database
-    app.state.access = service
-    app.add_middleware(LocalBoundary)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
+    aplicacao.state.database = banco
+    aplicacao.state.access = servico
+    aplicacao.add_middleware(LocalBoundary)
+    aplicacao.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
 
-    @app.exception_handler(DomainError)
-    async def domain_error(request: Request, error: DomainError):
-        return JSONResponse({"detail": error.message}, status_code=error.status)
+    @aplicacao.exception_handler(DomainError)
+    async def tratar_erro_dominio(requisicao: Request, erro: DomainError):
+        return JSONResponse({"detail": erro.message}, status_code=erro.status)
 
-    @app.exception_handler(sqlite3.Error)
-    async def persistence_error(request: Request, error: sqlite3.Error):
+    @aplicacao.exception_handler(sqlite3.Error)
+    async def tratar_erro_persistencia(requisicao: Request, erro: sqlite3.Error):
         return JSONResponse(
             {"detail": "Persistência indisponível. Nenhuma autorização confirmada."},
             status_code=503,
         )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error(request: Request, error: RequestValidationError):
+    @aplicacao.exception_handler(RequestValidationError)
+    async def tratar_erro_validacao(requisicao: Request, erro: RequestValidationError):
         # Nunca ecoar input, base64 ou contexto de exceções de validação.
         return JSONResponse(
             {"detail": "Dados inválidos. Confira os campos e o formato das imagens."},
             status_code=422,
         )
 
-    @app.get("/api/users", response_model=UserPage, tags=["Usuários"])
-    def list_users(
+    @aplicacao.get(
+        "/api/users",
+        response_model=UserPage,
+        tags=["Usuários"],
+        operation_id="list_users_api_users_get",
+        summary="List Users",
+    )
+    def listar_usuarios(
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=100),
     ):
-        with database.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            ids = connection.execute(
+        with banco.conectar() as conexao:
+            total = conexao.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            identificadores = conexao.execute(
                 "SELECT subject_id FROM users ORDER BY subject_id LIMIT ? OFFSET ?", (limit, offset)
             ).fetchall()
-            items = [database.user(connection, row[0]) for row in ids]
-        return {"items": items, "total": total, "offset": offset, "limit": limit}
+            itens = [banco.obter_usuario(conexao, linha[0]) for linha in identificadores]
+        return {"items": itens, "total": total, "offset": offset, "limit": limit}
 
-    @app.post("/api/users", status_code=201, response_model=UserResponse, tags=["Usuários"])
-    def create_user(body: UserCreate):
-        with database.connect(write=True) as connection:
-            database.insert_user(
-                connection,
-                body.subject_id,
-                body.display_name,
-                body.level,
-                body.active,
-                body.divisions,
+    @aplicacao.post(
+        "/api/users",
+        status_code=201,
+        response_model=UserResponse,
+        tags=["Usuários"],
+        operation_id="create_user_api_users_post",
+        summary="Create User",
+    )
+    def criar_usuario(corpo: UserCreate):
+        with banco.conectar(write=True) as conexao:
+            banco.inserir_usuario(
+                conexao,
+                corpo.subject_id,
+                corpo.display_name,
+                corpo.level,
+                corpo.active,
+                corpo.divisions,
             )
-            return database.user(connection, body.subject_id)
+            return banco.obter_usuario(conexao, corpo.subject_id)
 
-    @app.get("/api/users/{subject_id}", response_model=UserResponse, tags=["Usuários"])
-    def get_user(subject_id: str):
-        with database.connect() as connection:
-            return database.user(connection, subject_id)
+    @aplicacao.get(
+        "/api/users/{subject_id}",
+        response_model=UserResponse,
+        tags=["Usuários"],
+        operation_id="get_user_api_users__subject_id__get",
+        summary="Get User",
+    )
+    def consultar_usuario(subject_id: str):
+        with banco.conectar() as conexao:
+            return banco.obter_usuario(conexao, subject_id)
 
-    @app.put("/api/users/{subject_id}", response_model=UserResponse, tags=["Usuários"])
-    def update_user(subject_id: str, body: UserUpdate):
-        with database.connect(write=True) as connection:
-            database.user(connection, subject_id)
-            connection.execute(
+    @aplicacao.put(
+        "/api/users/{subject_id}",
+        response_model=UserResponse,
+        tags=["Usuários"],
+        operation_id="update_user_api_users__subject_id__put",
+        summary="Update User",
+    )
+    def atualizar_usuario(subject_id: str, corpo: UserUpdate):
+        with banco.conectar(write=True) as conexao:
+            banco.obter_usuario(conexao, subject_id)
+            conexao.execute(
                 "UPDATE users SET display_name=?, level=?, active=?, updated_at=? "
                 "WHERE subject_id=?",
-                (body.display_name, body.level, int(body.active), now(), subject_id),
+                (corpo.display_name, corpo.level, int(corpo.active), agora(), subject_id),
             )
-            connection.execute("DELETE FROM user_divisions WHERE subject_id=?", (subject_id,))
-            connection.executemany(
+            conexao.execute("DELETE FROM user_divisions WHERE subject_id=?", (subject_id,))
+            conexao.executemany(
                 "INSERT INTO user_divisions VALUES (?, ?)",
-                [(subject_id, division) for division in body.divisions],
+                [(subject_id, divisao) for divisao in corpo.divisions],
             )
-            return database.user(connection, subject_id)
+            return banco.obter_usuario(conexao, subject_id)
 
-    def purge_legacy(subject_id):
+    def limpar_galeria_legada(subject_id):
         # A exclusão confirmada não deve deixar cópia ativa no laboratório legado.
-        legacy = Gallery(directory)
+        galeria_legada = Gallery(diretorio)
         try:
-            if subject_id in legacy.read()["subjects"]:
-                legacy.delete(subject_id)
-        except ValueError as error:
-            raise DomainError(503, "Não foi possível excluir a cópia do laboratório.") from error
+            if subject_id in galeria_legada.ler()["subjects"]:
+                galeria_legada.excluir(subject_id)
+        except ValueError as erro:
+            raise DomainError(503, "Não foi possível excluir a cópia do laboratório.") from erro
 
-    @app.delete("/api/users/{subject_id}", status_code=204, tags=["Usuários"])
-    def delete_user(subject_id: str):
-        with database.connect() as connection:
-            database.user(connection, subject_id)
-        purge_legacy(subject_id)
-        with database.connect(write=True) as connection:
-            database.user(connection, subject_id)
-            connection.execute("DELETE FROM users WHERE subject_id=?", (subject_id,))
+    @aplicacao.delete(
+        "/api/users/{subject_id}",
+        status_code=204,
+        tags=["Usuários"],
+        operation_id="delete_user_api_users__subject_id__delete",
+        summary="Delete User",
+    )
+    def excluir_usuario(subject_id: str):
+        with banco.conectar() as conexao:
+            banco.obter_usuario(conexao, subject_id)
+        limpar_galeria_legada(subject_id)
+        with banco.conectar(write=True) as conexao:
+            banco.obter_usuario(conexao, subject_id)
+            conexao.execute("DELETE FROM users WHERE subject_id=?", (subject_id,))
 
-    @app.post("/api/users/{subject_id}/biometrics", response_model=UserResponse, tags=["Biometria"])
-    def enroll(subject_id: str, body: Enrollment):
-        service.enroll(subject_id, body.images)
-        with database.connect() as connection:
-            return database.user(connection, subject_id)
+    @aplicacao.post(
+        "/api/users/{subject_id}/biometrics",
+        response_model=UserResponse,
+        tags=["Biometria"],
+        operation_id="enroll_api_users__subject_id__biometrics_post",
+        summary="Enroll",
+    )
+    def cadastrar_biometria(subject_id: str, corpo: Enrollment):
+        servico.cadastrar_biometria(subject_id, corpo.images)
+        with banco.conectar() as conexao:
+            return banco.obter_usuario(conexao, subject_id)
 
-    @app.delete("/api/users/{subject_id}/biometrics", status_code=204, tags=["Biometria"])
-    def delete_biometrics(subject_id: str):
-        with database.connect() as connection:
-            database.user(connection, subject_id)
-        purge_legacy(subject_id)
-        with database.connect(write=True) as connection:
-            database.user(connection, subject_id)
-            connection.execute("DELETE FROM biometric_references WHERE subject_id=?", (subject_id,))
-            connection.execute(
+    @aplicacao.delete(
+        "/api/users/{subject_id}/biometrics",
+        status_code=204,
+        tags=["Biometria"],
+        operation_id="delete_biometrics_api_users__subject_id__biometrics_delete",
+        summary="Delete Biometrics",
+    )
+    def excluir_biometria(subject_id: str):
+        with banco.conectar() as conexao:
+            banco.obter_usuario(conexao, subject_id)
+        limpar_galeria_legada(subject_id)
+        with banco.conectar(write=True) as conexao:
+            banco.obter_usuario(conexao, subject_id)
+            conexao.execute("DELETE FROM biometric_references WHERE subject_id=?", (subject_id,))
+            conexao.execute(
                 "UPDATE users SET consent_at=NULL, consent_version=NULL, updated_at=? "
                 "WHERE subject_id=?",
-                (now(), subject_id),
+                (agora(), subject_id),
             )
 
-    @app.post("/api/biometrics/analyze", response_model=CaptureResponse, tags=["Biometria"])
-    def analyze(body: ImageInput):
-        return service.analyze(body.image)
+    @aplicacao.post(
+        "/api/biometrics/analyze",
+        response_model=CaptureResponse,
+        tags=["Biometria"],
+        operation_id="analyze_api_biometrics_analyze_post",
+        summary="Analyze",
+    )
+    def analisar(corpo: ImageInput):
+        return servico.analisar(corpo.image)
 
-    @app.post("/api/attempts", response_model=DecisionResponse, tags=["Acessos"])
-    def attempt(body: AttemptInput):
-        return service.attempt(body.image, body.requested_level, body.division)
+    @aplicacao.post(
+        "/api/attempts",
+        response_model=DecisionResponse,
+        tags=["Acessos"],
+        operation_id="attempt_api_attempts_post",
+        summary="Attempt",
+    )
+    def avaliar_acesso(corpo: AttemptInput):
+        return servico.avaliar_acesso(corpo.image, corpo.requested_level, corpo.division)
 
-    @app.get("/api/attempts", response_model=AttemptPage, tags=["Acessos"])
-    def list_attempts(
+    @aplicacao.get(
+        "/api/attempts",
+        response_model=AttemptPage,
+        tags=["Acessos"],
+        operation_id="list_attempts_api_attempts_get",
+        summary="List Attempts",
+    )
+    def listar_tentativas(
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=100),
         granted: bool | None = None,
     ):
-        where = " WHERE granted=?" if granted is not None else ""
-        params = (int(granted),) if granted is not None else ()
-        with database.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) FROM attempts" + where, params).fetchone()[
-                0
-            ]
-            rows = connection.execute(
-                "SELECT * FROM attempts" + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
-                (*params, limit, offset),
+        condicao_sql = " WHERE granted=?" if granted is not None else ""
+        parametros = (int(granted),) if granted is not None else ()
+        with banco.conectar() as conexao:
+            total = conexao.execute(
+                "SELECT COUNT(*) FROM attempts" + condicao_sql, parametros
+            ).fetchone()[0]
+            linhas = conexao.execute(
+                "SELECT * FROM attempts" + condicao_sql + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                (*parametros, limit, offset),
             ).fetchall()
         return {
-            "items": [attempt_record(row) for row in rows],
+            "items": [registro_tentativa(linha) for linha in linhas],
             "total": total,
             "offset": offset,
             "limit": limit,
         }
 
-    @app.get("/api/stats", response_model=StatsResponse, tags=["Acessos"])
-    def stats():
-        with database.connect() as connection:
-            users = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            enrolled = connection.execute("SELECT COUNT(*) FROM biometric_references").fetchone()[0]
-            attempts, granted = connection.execute(
+    @aplicacao.get(
+        "/api/stats",
+        response_model=StatsResponse,
+        tags=["Acessos"],
+        operation_id="stats_api_stats_get",
+        summary="Stats",
+    )
+    def consultar_indicadores():
+        with banco.conectar() as conexao:
+            usuarios = conexao.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            cadastrados = conexao.execute("SELECT COUNT(*) FROM biometric_references").fetchone()[0]
+            tentativas, granted = conexao.execute(
                 "SELECT COUNT(*), COALESCE(SUM(granted),0) FROM attempts"
             ).fetchone()
         return {
-            "users": users,
-            "enrolled": enrolled,
-            "attempts": attempts,
+            "users": usuarios,
+            "enrolled": cadastrados,
+            "attempts": tentativas,
             "granted": granted,
-            "denied": attempts - granted,
+            "denied": tentativas - granted,
         }
 
-    @app.post("/api/legacy/import", response_model=ImportResponse, tags=["Usuários"])
-    def import_legacy():
-        legacy = Gallery(directory)
+    @aplicacao.post(
+        "/api/legacy/import",
+        response_model=ImportResponse,
+        tags=["Usuários"],
+        operation_id="import_legacy_api_legacy_import_post",
+        summary="Import Legacy",
+    )
+    def importar_legado():
+        galeria_legada = Gallery(diretorio)
         try:
-            records = legacy.read()["subjects"]
-        except ValueError as error:
+            registros = galeria_legada.ler()["subjects"]
+        except ValueError as erro:
             raise DomainError(
                 503, "Galeria laboratorial indisponível. Verifique a chave."
-            ) from error
-        encrypted = {
-            key: database.encode_samples(record["samples"][:5]) for key, record in records.items()
+            ) from erro
+        conteudo_cifrado = {
+            chave: banco.cifrar_amostras(registro["samples"][:5])
+            for chave, registro in registros.items()
         }
-        imported = 0
-        already_present = 0
+        importados = 0
+        ja_presentes = 0
         # Nunca sobrescrever cadastro do painel. Em colisão, preservar origem e pedir revisão.
-        with database.connect(write=True) as connection:
-            for subject_id, record in records.items():
-                existing = connection.execute(
+        with banco.conectar(write=True) as conexao:
+            for subject_id, registro in registros.items():
+                existente = conexao.execute(
                     "SELECT 1 FROM users WHERE subject_id=?", (subject_id,)
                 ).fetchone()
-                if existing:
+                if existente:
                     # Somente a mesma referência previamente importada pode concluir limpeza
                     # de uma operação cuja gravação já tenha sido confirmada.
-                    user = database.user(connection, subject_id)
-                    existing_samples = database.references(connection).get(subject_id, [])
-                    same_samples = len(existing_samples) == 5 and all(
-                        np.allclose(a, b, atol=1e-6)
-                        for a, b in zip(existing_samples, record["samples"][:5], strict=True)
+                    usuario = banco.obter_usuario(conexao, subject_id)
+                    amostras_existentes = banco.obter_referencias(conexao).get(subject_id, [])
+                    mesmas_amostras = len(amostras_existentes) == 5 and all(
+                        np.allclose(vetor_a, vetor_b, atol=1e-6)
+                        for vetor_a, vetor_b in zip(
+                            amostras_existentes, registro["samples"][:5], strict=True
+                        )
                     )
                     if (
-                        user["consent_version"] != "laboratorio-v1"
-                        or user["consent_at"] != record["consent_at"]
-                        or not same_samples
+                        usuario["consent_version"] != "laboratorio-v1"
+                        or usuario["consent_at"] != registro["consent_at"]
+                        or not mesmas_amostras
                     ):
                         raise DomainError(
                             409,
                             "ID do laboratório já existe no painel. "
                             "Resolva a colisão antes de importar.",
                         )
-                    already_present += 1
+                    ja_presentes += 1
                     continue
-                database.insert_user(
-                    connection,
+                banco.inserir_usuario(
+                    conexao,
                     subject_id,
                     subject_id,
-                    record["level"],
-                    record["active"],
-                    record["divisions"],
+                    registro["level"],
+                    registro["active"],
+                    registro["divisions"],
                 )
-                database.save_samples(
-                    connection,
+                banco.salvar_amostras(
+                    conexao,
                     subject_id,
-                    encrypted[subject_id],
-                    record["consent_at"],
-                    record["consent_version"],
+                    conteudo_cifrado[subject_id],
+                    registro["consent_at"],
+                    registro["consent_version"],
                 )
-                imported += 1
-        if records:
+                importados += 1
+        if registros:
             try:
 
-                def clear_imported(subjects):
-                    for key, expected in records.items():
-                        if key in subjects and subjects[key] != expected:
+                def limpar_importados(pessoas):
+                    for chave, esperado in registros.items():
+                        if chave in pessoas and pessoas[chave] != esperado:
                             raise ValueError("Origem alterada durante a importação.")
-                    for key in records:
-                        subjects.pop(key, None)
+                    for chave in registros:
+                        pessoas.pop(chave, None)
 
-                legacy._change(clear_imported)
-            except (ValueError, sqlite3.Error, OSError) as error:
+                galeria_legada._alterar(limpar_importados)
+            except (ValueError, sqlite3.Error, OSError) as erro:
                 raise DomainError(
                     503,
                     "Importação gravada, mas limpeza da origem falhou. Repita antes de continuar.",
-                ) from error
-        return {"imported": imported, "already_present": already_present}
+                ) from erro
+        return {"imported": importados, "already_present": ja_presentes}
 
-    @app.get("/api/openapi.json", include_in_schema=False)
-    def openapi():
-        return app.openapi()
+    @aplicacao.get("/api/openapi.json", include_in_schema=False)
+    def obter_contrato():
+        return aplicacao.openapi()
 
-    @app.get("/{path:path}", include_in_schema=False)
-    def frontend(path: str):
+    @aplicacao.get("/{path:path}", include_in_schema=False)
+    def servir_interface(path: str):
         if path.startswith("api/"):
             raise DomainError(404, "Endpoint não encontrado.")
-        root = DIST.resolve()
-        candidate = (root / path).resolve()
-        if not candidate.is_relative_to(root):
+        raiz = DIST.resolve()
+        candidato = (raiz / path).resolve()
+        if not candidato.is_relative_to(raiz):
             raise DomainError(404, "Arquivo não encontrado.")
-        if candidate.is_file():
-            return FileResponse(candidate)
-        if not (root / "index.html").is_file():
+        if candidato.is_file():
+            return FileResponse(candidato)
+        if not (raiz / "index.html").is_file():
             raise DomainError(
                 503, "Interface não compilada. Execute npm ci e npm run build na pasta frontend."
             )
-        return FileResponse(root / "index.html")
+        return FileResponse(raiz / "index.html")
 
-    return app
+    return aplicacao

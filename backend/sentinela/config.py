@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def data_directory() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
-    return Path(os.environ.get("SENTINELA_DATA_DIR", base / "Sentinela" / "prototype"))
+def diretorio_dados() -> Path:
+    pasta_base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
+    return Path(os.environ.get("SENTINELA_DATA_DIR", pasta_base / "Sentinela" / "prototype"))
 
 
 @dataclass(frozen=True)
@@ -22,8 +22,8 @@ class BiometricConfig:
 
     def __post_init__(self):
         if not all(
-            math.isfinite(value)
-            for value in (
+            math.isfinite(valor)
+            for valor in (
                 self.detection_threshold,
                 self.similarity_threshold,
                 self.ambiguity_margin,

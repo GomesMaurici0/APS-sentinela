@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-from sentinela.api import create_app
+from sentinela.api import criar_aplicacao
 from sentinela.autorizacao import UserPermission
 from sentinela.biometria.models import DEFAULT_MODELS, MODELS
 from sentinela.biometria.pipeline import Analysis, CaptureStatus
@@ -36,7 +36,7 @@ class ControlledPipeline:
     feature: np.ndarray = field(default_factory=vector)
     failure: bool = False
 
-    def analyze(self, frame):
+    def analisar(self, frame):
         if self.failure:
             raise cv2.error("falha simulada")
         return Analysis(self.status, frame=frame, embedding=self.feature.copy(), elapsed_ms=2)
@@ -45,7 +45,7 @@ class ControlledPipeline:
 @pytest.fixture
 def environment(tmp_path):
     pipeline = ControlledPipeline()
-    app = create_app(tmp_path, pipeline=pipeline)
+    app = criar_aplicacao(tmp_path, pipeline=pipeline)
     with TestClient(app, base_url="http://localhost") as client:
         yield client, app, pipeline
 
@@ -65,13 +65,13 @@ def create(client, subject="voluntario", level=1, divisions=None):
     return response.json()
 
 
-def enroll(client, subject="voluntario"):
+def cadastrar_biometria(client, subject="voluntario"):
     return client.post(
         f"/api/users/{subject}/biometrics", json={"consent": True, "images": [image()] * 5}
     )
 
 
-def attempt(client, app, level=1, division=None, encoded=None):
+def avaliar_acesso(client, app, level=1, division=None, encoded=None):
     app.state.access.last_attempt = 0
     return client.post(
         "/api/attempts",
@@ -149,10 +149,10 @@ def test_enrollment_requires_consent_quality_and_no_biometric_response(environme
         == 422
     )
     pipeline.status = CaptureStatus.MULTIPLE_FACES
-    assert enroll(client).status_code == 422
+    assert cadastrar_biometria(client).status_code == 422
     assert client.get("/api/users/voluntario").json()["sample_count"] == 0
     pipeline.status = CaptureStatus.OK
-    response = enroll(client)
+    response = cadastrar_biometria(client)
     assert response.status_code == 200 and response.json()["sample_count"] == 5
     assert "samples" not in response.text and "embedding" not in response.text
     assert b'"samples"' not in app.state.database.path.read_bytes()
@@ -161,21 +161,21 @@ def test_enrollment_requires_consent_quality_and_no_biometric_response(environme
 def test_duplicate_face_rejected(environment):
     client, _, _ = environment
     create(client, "a")
-    assert enroll(client, "a").status_code == 200
+    assert cadastrar_biometria(client, "a").status_code == 200
     create(client, "b")
-    assert enroll(client, "b").status_code == 409
+    assert cadastrar_biometria(client, "b").status_code == 409
 
 
 def test_permission_changes_are_effective_and_attempts_persist(environment):
     client, app, _ = environment
     create(client, level=2, divisions=["a", "b"])
-    assert enroll(client).status_code == 200
-    first = attempt(client, app, 2, "b")
+    assert cadastrar_biometria(client).status_code == 200
+    first = avaliar_acesso(client, app, 2, "b")
     assert first.status_code == 200 and first.json()["granted"] is True
-    assert attempt(client, app, 2, "c").json()["reason"] == "divisao_nao_autorizada"
-    assert attempt(client, app, 3).json()["reason"] == "nivel_insuficiente"
+    assert avaliar_acesso(client, app, 2, "c").json()["reason"] == "divisao_nao_autorizada"
+    assert avaliar_acesso(client, app, 3).json()["reason"] == "nivel_insuficiente"
     client.put("/api/users/voluntario", json={"display_name": "Teste", "level": 3, "active": False})
-    assert attempt(client, app).json()["reason"] == "usuario_inativo"
+    assert avaliar_acesso(client, app).json()["reason"] == "usuario_inativo"
     history = client.get("/api/attempts?limit=2&offset=0").json()
     assert history["total"] == 4 and len(history["items"]) == 2
     assert client.get("/api/attempts?granted=true").json()["total"] == 1
@@ -191,46 +191,46 @@ def test_permission_changes_are_effective_and_attempts_persist(environment):
 
 def test_unknown_no_face_and_multiple_faces_denied(environment):
     client, app, pipeline = environment
-    assert attempt(client, app).json()["reason"] == "sem_referencias"
+    assert avaliar_acesso(client, app).json()["reason"] == "sem_referencias"
     create(client)
-    assert enroll(client).status_code == 200
+    assert cadastrar_biometria(client).status_code == 200
     pipeline.feature = vector(1)
-    assert attempt(client, app).json()["reason"] == "desconhecido"
+    assert avaliar_acesso(client, app).json()["reason"] == "desconhecido"
     for status in (CaptureStatus.NO_FACE, CaptureStatus.MULTIPLE_FACES, CaptureStatus.DARK):
         pipeline.status = status
-        result = attempt(client, app).json()
+        result = avaliar_acesso(client, app).json()
         assert result["reason"] == status.value and not result["granted"]
 
 
 def test_delete_invalidates_references_and_anonymizes_history(environment):
     client, app, _ = environment
     create(client)
-    assert enroll(client).status_code == 200
-    assert attempt(client, app).json()["subject_id"] == "voluntario"
+    assert cadastrar_biometria(client).status_code == 200
+    assert avaliar_acesso(client, app).json()["subject_id"] == "voluntario"
     assert client.delete("/api/users/voluntario").status_code == 204
     assert client.get("/api/attempts").json()["items"][0]["subject_id"] is None
-    assert attempt(client, app).json()["reason"] == "sem_referencias"
+    assert avaliar_acesso(client, app).json()["reason"] == "sem_referencias"
 
 
 def test_revoke_biometrics_retains_user(environment):
     client, app, _ = environment
     create(client)
-    assert enroll(client).status_code == 200
+    assert cadastrar_biometria(client).status_code == 200
     assert client.delete("/api/users/voluntario/biometrics").status_code == 204
     assert client.get("/api/users/voluntario").json()["consent_at"] is None
-    assert attempt(client, app).json()["reason"] == "sem_referencias"
+    assert avaliar_acesso(client, app).json()["reason"] == "sem_referencias"
 
 
 def test_audit_failure_never_returns_grant(environment):
     client, app, _ = environment
     create(client)
-    assert enroll(client).status_code == 200
-    with app.state.database.connect(write=True) as connection:
+    assert cadastrar_biometria(client).status_code == 200
+    with app.state.database.conectar(write=True) as connection:
         connection.executescript(
             "CREATE TRIGGER audit_failure BEFORE INSERT ON attempts "
             "BEGIN SELECT RAISE(ABORT, 'falha'); END;"
         )
-    response = attempt(client, app)
+    response = avaliar_acesso(client, app)
     assert response.status_code == 503 and "granted" not in response.json()
     assert client.get("/api/attempts").json()["total"] == 0
 
@@ -238,7 +238,7 @@ def test_audit_failure_never_returns_grant(environment):
 def test_engine_failure_is_denied_and_audited(environment):
     client, app, pipeline = environment
     pipeline.failure = True
-    response = attempt(client, app)
+    response = avaliar_acesso(client, app)
     assert response.status_code == 503
     history = client.get("/api/attempts").json()["items"]
     assert history[0]["reason"] == "falha_biometrica" and not history[0]["granted"]
@@ -249,7 +249,7 @@ def test_validation_does_not_echo_sensitive_input(environment):
     secret = "conteudo_biometrico_privado"
     response = client.post("/api/attempts", json={"image": secret, "requested_level": 4})
     assert response.status_code == 422 and secret not in response.text
-    response = attempt(client, app, encoded=secret)
+    response = avaliar_acesso(client, app, encoded=secret)
     assert response.status_code == 200 and response.json()["reason"] == "imagem_invalida"
     assert secret not in client.get("/api/attempts").text
 
@@ -257,12 +257,14 @@ def test_validation_does_not_echo_sensitive_input(environment):
 def test_import_legacy_preserves_permissions_and_moves_references(environment, tmp_path):
     client, app, _ = environment
     legacy = Gallery(tmp_path)
-    legacy.enroll("antigo", UserPermission(2, frozenset({"a", "b"})), [vector()] * 5, True)
+    legacy.cadastrar_biometria(
+        "antigo", UserPermission(2, frozenset({"a", "b"})), [vector()] * 5, True
+    )
     response = client.post("/api/legacy/import")
     assert response.status_code == 200 and response.json()["imported"] == 1
-    assert legacy.references() == {}
+    assert legacy.obter_referencias() == {}
     assert client.get("/api/users/antigo").json()["divisions"] == ["a", "b"]
-    assert attempt(client, app, 2, "b").json()["granted"]
+    assert avaliar_acesso(client, app, 2, "b").json()["granted"]
     assert client.post("/api/legacy/import").json()["imported"] == 0
 
 
@@ -270,16 +272,16 @@ def test_import_conflict_never_erases_legacy(environment, tmp_path):
     client, _, _ = environment
     create(client, "antigo")
     legacy = Gallery(tmp_path)
-    legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
+    legacy.cadastrar_biometria("antigo", UserPermission(1), [vector()] * 5, True)
     assert client.post("/api/legacy/import").status_code == 409
-    assert "antigo" in legacy.references()
+    assert "antigo" in legacy.obter_referencias()
 
 
 def test_persistence_survives_new_app(environment, tmp_path):
     client, _, _ = environment
     create(client)
-    assert enroll(client).status_code == 200
-    other = create_app(tmp_path, pipeline=ControlledPipeline())
+    assert cadastrar_biometria(client).status_code == 200
+    other = criar_aplicacao(tmp_path, pipeline=ControlledPipeline())
     with TestClient(other, base_url="http://localhost") as restarted:
         assert restarted.get("/api/users").json()["total"] == 1
         assert restarted.post(
@@ -289,7 +291,7 @@ def test_persistence_survives_new_app(environment, tmp_path):
 
 def test_attempt_rate_limit(environment):
     client, app, _ = environment
-    assert attempt(client, app).status_code == 200
+    assert avaliar_acesso(client, app).status_code == 200
     assert (
         client.post("/api/attempts", json={"image": image(), "requested_level": 1}).status_code
         == 429
@@ -313,9 +315,9 @@ def test_oversized_body_and_bad_image_dimensions(environment):
 def test_real_api_inference_without_face(tmp_path):
     if not all((DEFAULT_MODELS / spec["file"]).exists() for spec in MODELS.values()):
         pytest.skip("Modelos locais não instalados")
-    app = create_app(tmp_path)
+    app = criar_aplicacao(tmp_path)
     with TestClient(app, base_url="http://localhost") as client:
-        result = attempt(client, app)
+        result = avaliar_acesso(client, app)
         assert result.status_code == 200
         assert result.json()["reason"] == "nenhum_rosto"
         assert not result.json()["granted"]
@@ -324,9 +326,9 @@ def test_real_api_inference_without_face(tmp_path):
 def test_missing_biometric_key_denies_and_audits(environment):
     client, app, _ = environment
     create(client)
-    assert enroll(client).status_code == 200
+    assert cadastrar_biometria(client).status_code == 200
     app.state.database.key_path.unlink()
-    assert attempt(client, app).status_code == 503
+    assert avaliar_acesso(client, app).status_code == 503
     assert not app.state.database.key_path.exists()
     last = client.get("/api/attempts").json()["items"][0]
     assert last["reason"] == "falha_biometrica" and not last["granted"]
@@ -335,29 +337,29 @@ def test_missing_biometric_key_denies_and_audits(environment):
 def test_import_cleanup_retry_is_idempotent(environment, tmp_path, monkeypatch):
     client, _, _ = environment
     legacy = Gallery(tmp_path)
-    legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
-    original = Gallery._change
+    legacy.cadastrar_biometria("antigo", UserPermission(1), [vector()] * 5, True)
+    original = Gallery._alterar
 
     def fail(*args):
         raise sqlite3.OperationalError("falha de limpeza simulada")
 
-    monkeypatch.setattr(Gallery, "_change", fail)
+    monkeypatch.setattr(Gallery, "_alterar", fail)
     assert client.post("/api/legacy/import").status_code == 503
     assert client.get("/api/users").json()["total"] == 1
-    assert "antigo" in legacy.references()
-    monkeypatch.setattr(Gallery, "_change", original)
+    assert "antigo" in legacy.obter_referencias()
+    monkeypatch.setattr(Gallery, "_alterar", original)
     result = client.post("/api/legacy/import")
     assert result.status_code == 200
     assert result.json() == {"imported": 0, "already_present": 1}
-    assert legacy.references() == {}
+    assert legacy.obter_referencias() == {}
 
 
 def test_delete_missing_user_does_not_erase_legacy(environment, tmp_path):
     client, _, _ = environment
     legacy = Gallery(tmp_path)
-    legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
+    legacy.cadastrar_biometria("antigo", UserPermission(1), [vector()] * 5, True)
     assert client.delete("/api/users/antigo").status_code == 404
-    assert "antigo" in legacy.references()
+    assert "antigo" in legacy.obter_referencias()
 
 
 def test_openapi_has_no_administrative_authentication(environment):
@@ -373,10 +375,10 @@ def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
 
     database = Database(tmp_path)
     tmp_path.mkdir(exist_ok=True)
-    with database.connect() as connection:
+    with database.conectar() as connection:
         migration = Path(__file__).parents[1] / "sentinela/migrations/001_initial.sql"
         connection.executescript(migration.read_text("utf-8"))
-        database.insert_user(connection, "preservado", "Usuário", 1, True, [])
+        database.inserir_usuario(connection, "preservado", "Usuário", 1, True, [])
         connection.execute("INSERT INTO administrators VALUES ('antigo', 'hash-legado', 'data')")
         connection.execute(
             "INSERT INTO biometric_references VALUES ('preservado', 'modelo', ?, 5, 'data')",
@@ -387,10 +389,10 @@ def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
             "reason, elapsed_ms, model_id, config_json) "
             "VALUES ('data', 'preservado', 1, 1, 'acesso_autorizado', 2, 'modelo', '{}')"
         )
-    database.initialize()
-    database.initialize()
-    with database.connect() as connection:
-        assert database.user(connection, "preservado")["level"] == 1
+    database.inicializar()
+    database.inicializar()
+    with database.conectar() as connection:
+        assert database.obter_usuario(connection, "preservado")["level"] == 1
         assert (
             connection.execute("SELECT encrypted_samples FROM biometric_references").fetchone()[0]
             == b"referencias-cifradas-preservadas"

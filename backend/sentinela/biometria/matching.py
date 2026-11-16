@@ -4,7 +4,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from sentinela.biometria.pipeline import normalized_embedding
+from sentinela.biometria.pipeline import normalizar_vetor_facial
 from sentinela.config import BiometricConfig
 
 
@@ -23,25 +23,24 @@ class Match:
     margin: float | None = None
 
 
-def identify(
-        query: np.ndarray, gallery: Mapping[str, Sequence[np.ndarray]], config: BiometricConfig
+def identificar(
+    consulta: np.ndarray, galeria: Mapping[str, Sequence[np.ndarray]], configuracao: BiometricConfig
 ) -> Match:
-    """Média dos cossenos por identidade; segundo colocado é outra pessoa."""
-    query = normalized_embedding(query)
-    scores = []
-    for subject_id, samples in gallery.items():
-        if len(samples) == 0:
+    consulta = normalizar_vetor_facial(consulta)
+    pontuacoes = []
+    for identificador, amostras in galeria.items():
+        if len(amostras) == 0:
             continue
-        similarities = [float(query @ normalized_embedding(sample)) for sample in samples]
-        scores.append((float(np.mean(similarities)), subject_id))
-    if not scores:
+        similaridades = [float(consulta @ normalizar_vetor_facial(amostra)) for amostra in amostras]
+        pontuacoes.append((float(np.mean(similaridades)), identificador))
+    if not pontuacoes:
         return Match(MatchStatus.EMPTY)
-    scores.sort(reverse=True)
-    best, subject_id = scores[0]
-    best = float(np.clip(best, -1, 1))
-    margin = best - scores[1][0] if len(scores) > 1 else None
-    if best < config.similarity_threshold:
-        return Match(MatchStatus.UNKNOWN, similarity=best, margin=margin)
-    if margin is not None and margin < config.ambiguity_margin:
-        return Match(MatchStatus.AMBIGUOUS, similarity=best, margin=margin)
-    return Match(MatchStatus.MATCHED, subject_id, best, margin)
+    pontuacoes.sort(reverse=True)
+    melhor_pontuacao, identificador = pontuacoes[0]
+    melhor_pontuacao = float(np.clip(melhor_pontuacao, -1, 1))
+    margem = melhor_pontuacao - pontuacoes[1][0] if len(pontuacoes) > 1 else None
+    if melhor_pontuacao < configuracao.similarity_threshold:
+        return Match(MatchStatus.UNKNOWN, similarity=melhor_pontuacao, margin=margem)
+    if margem is not None and margem < configuracao.ambiguity_margin:
+        return Match(MatchStatus.AMBIGUOUS, similarity=melhor_pontuacao, margin=margem)
+    return Match(MatchStatus.MATCHED, identificador, melhor_pontuacao, margem)
