@@ -24,7 +24,7 @@ class Match:
 
 
 def identify(
-    query: np.ndarray, gallery: Mapping[str, Sequence[np.ndarray]], config: BiometricConfig
+        query: np.ndarray, gallery: Mapping[str, Sequence[np.ndarray]], config: BiometricConfig
 ) -> Match:
     """Média dos cossenos por identidade; segundo colocado é outra pessoa."""
     query = normalized_embedding(query)

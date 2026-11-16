@@ -99,7 +99,7 @@ class LocalBoundary:
 
 
 def create_app(
-    directory: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
+        directory: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
 ) -> FastAPI:
     directory = directory or data_directory()
     database = Database(directory)
@@ -185,9 +185,9 @@ def create_app(
 
     @app.get("/api/users", response_model=UserPage, tags=["Usuários"])
     def list_users(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(50, ge=1, le=100),
-        session=Depends(authenticated),
+            offset: int = Query(0, ge=0),
+            limit: int = Query(50, ge=1, le=100),
+            session=Depends(authenticated),
     ):
         with database.connect() as connection:
             total = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -279,10 +279,10 @@ def create_app(
 
     @app.get("/api/attempts", response_model=AttemptPage, tags=["Acessos"])
     def list_attempts(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(50, ge=1, le=100),
-        granted: bool | None = None,
-        session=Depends(authenticated),
+            offset: int = Query(0, ge=0),
+            limit: int = Query(50, ge=1, le=100),
+            granted: bool | None = None,
+            session=Depends(authenticated),
     ):
         where = " WHERE granted=?" if granted is not None else ""
         params = (int(granted),) if granted is not None else ()
@@ -347,9 +347,9 @@ def create_app(
                         for a, b in zip(existing_samples, record["samples"][:5], strict=True)
                     )
                     if (
-                        user["consent_version"] != "laboratorio-v1"
-                        or user["consent_at"] != record["consent_at"]
-                        or not same_samples
+                            user["consent_version"] != "laboratorio-v1"
+                            or user["consent_at"] != record["consent_at"]
+                            or not same_samples
                     ):
                         raise DomainError(
                             409,

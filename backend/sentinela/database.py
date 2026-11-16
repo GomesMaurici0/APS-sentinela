@@ -204,7 +204,7 @@ class Database:
 
     @staticmethod
     def save_samples(
-        connection, subject_id, encrypted, consent_at=None, consent_version="cadastro-v1"
+            connection, subject_id, encrypted, consent_at=None, consent_version="cadastro-v1"
     ):
         connection.execute(
             "INSERT OR REPLACE INTO biometric_references VALUES (?, ?, ?, ?, ?)",

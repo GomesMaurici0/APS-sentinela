@@ -28,7 +28,7 @@ def decode_image(encoded: str) -> np.ndarray:
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as image:
                 if image.format not in ("JPEG", "PNG") or not (
-                    16 <= image.width <= 960 and 16 <= image.height <= 960
+                        16 <= image.width <= 960 and 16 <= image.height <= 960
                 ):
                     raise ValueError("Dimensões ou formato inválidos")
                 image.verify()
@@ -37,13 +37,13 @@ def decode_image(encoded: str) -> np.ndarray:
             raise ValueError("Imagem inválida")
         return frame
     except (
-        ValueError,
-        OSError,
-        binascii.Error,
-        UnidentifiedImageError,
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-        cv2.error,
+            ValueError,
+            OSError,
+            binascii.Error,
+            UnidentifiedImageError,
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            cv2.error,
     ) as error:
         raise DomainError(
             422, "Imagem inválida. Use JPEG/PNG com dimensões entre 16 e 960 px."
@@ -123,8 +123,8 @@ class AccessService:
             for sample in results:
                 match = identify(sample, references, self.config)
                 if (
-                    match.similarity is not None
-                    and match.similarity >= self.config.similarity_threshold
+                        match.similarity is not None
+                        and match.similarity >= self.config.similarity_threshold
                 ):
                     raise DomainError(
                         409, "Rosto semelhante a outro cadastro. Revise as identidades."

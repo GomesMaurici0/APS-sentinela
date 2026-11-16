@@ -1,4 +1,3 @@
-"""Comandos do laboratório biométrico e do servidor local do painel."""
 
 import argparse
 import getpass

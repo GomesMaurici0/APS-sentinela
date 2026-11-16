@@ -51,7 +51,7 @@ def face_quality(frame, face, config: BiometricConfig):
     image_height, image_width = frame.shape[:2]
     if x < 0 or y < 0 or x + width > image_width or y + height > image_height:
         return CaptureStatus.FACE_OUTSIDE, None, None
-    crop = frame[int(y) : int(y + height), int(x) : int(x + width)]
+    crop = frame[int(y): int(y + height), int(x): int(x + width)]
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     brightness = float(np.mean(gray))
     sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -81,11 +81,11 @@ class FacePipeline:
         start = perf_counter()
         result = Analysis(CaptureStatus.INVALID_FRAME)
         if (
-            not isinstance(frame, np.ndarray)
-            or frame.dtype != np.uint8
-            or frame.ndim != 3
-            or frame.shape[2] != 3
-            or min(frame.shape[:2]) < 16
+                not isinstance(frame, np.ndarray)
+                or frame.dtype != np.uint8
+                or frame.ndim != 3
+                or frame.shape[2] != 3
+                or min(frame.shape[:2]) < 16
         ):
             return result
         height, width = frame.shape[:2]

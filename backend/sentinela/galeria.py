@@ -1,4 +1,3 @@
-"""Galeria experimental criptografada. Não substitui o cadastro administrativo futuro."""
 
 import json
 import os
@@ -18,7 +17,6 @@ MINIMUM_SAMPLES = 5
 
 
 class Gallery:
-    """Uma transação protege a leitura/alteração da galeria inteira contra perda de atualização."""
 
     def __init__(self, directory: Path):
         self.directory = directory

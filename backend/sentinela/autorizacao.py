@@ -25,7 +25,7 @@ class AccessDecision:
 
 
 def authorize(
-    user: UserPermission | None, requested_level: int, division: str | None = None
+        user: UserPermission | None, requested_level: int, division: str | None = None
 ) -> AccessDecision:
     if requested_level not in (1, 2, 3):
         return AccessDecision(False, "recurso_invalido")

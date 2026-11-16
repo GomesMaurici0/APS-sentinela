@@ -5,14 +5,12 @@ from pathlib import Path
 
 
 def data_directory() -> Path:
-    """Dados privados fora do repositório e da árvore OneDrive por padrão."""
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
     return Path(os.environ.get("SENTINELA_DATA_DIR", base / "Sentinela" / "prototype"))
 
 
 @dataclass(frozen=True)
 class BiometricConfig:
-    # Valores iniciais experimentais. Similaridade não representa probabilidade.
     detection_threshold: float = 0.9
     similarity_threshold: float = 0.45
     ambiguity_margin: float = 0.08
