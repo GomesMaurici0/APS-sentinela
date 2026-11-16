@@ -1,19 +1,18 @@
 import base64
 import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-from sentinela.api import COOKIE, create_app
+from sentinela.api import create_app
 from sentinela.autorizacao import UserPermission
 from sentinela.biometria.models import DEFAULT_MODELS, MODELS
 from sentinela.biometria.pipeline import Analysis, CaptureStatus
 from sentinela.config import BiometricConfig
 from sentinela.galeria import Gallery
-
-PASSWORD = "senha-ficticia-teste-123"
 
 
 def image():
@@ -47,18 +46,8 @@ class ControlledPipeline:
 def environment(tmp_path):
     pipeline = ControlledPipeline()
     app = create_app(tmp_path, pipeline=pipeline)
-    app.state.database.create_admin("admin", PASSWORD)
     with TestClient(app, base_url="http://localhost") as client:
         yield client, app, pipeline
-
-
-@pytest.fixture
-def signed(environment):
-    client, app, pipeline = environment
-    response = client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
-    assert response.status_code == 200
-    client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
-    return client, app, pipeline
 
 
 def create(client, subject="voluntario", level=1, divisions=None):
@@ -90,71 +79,32 @@ def attempt(client, app, level=1, division=None, encoded=None):
     )
 
 
+@pytest.mark.parametrize("path", ["/api/users", "/api/attempts", "/api/stats", "/api/openapi.json"])
+def test_reads_work_without_login(environment, path):
+    client, _, _ = environment
+    assert client.get(path).status_code == 200
+
+
 @pytest.mark.parametrize(
-    "path", ["/api/users", "/api/attempts", "/api/stats", "/api/auth/session", "/api/openapi.json"]
+    "method,path",
+    [("POST", "/api/auth/login"), ("GET", "/api/auth/session"), ("POST", "/api/auth/logout")],
 )
-def test_reads_require_auth(environment, path):
+def test_removed_auth_routes_are_unavailable(environment, method, path):
     client, _, _ = environment
-    assert client.get(path).status_code == 401
+    assert client.request(method, path).status_code in (404, 405)
 
 
-def test_session_cookie_csrf_expiry_and_logout(signed):
-    client, app, _ = signed
-    token = client.cookies.get(COOKIE)
-    assert client.get("/api/auth/session").json()["username"] == "admin"
-    with app.state.database.connect() as connection:
-        stored = connection.execute("SELECT token_hash FROM sessions").fetchone()[0]
-        encoded = connection.execute("SELECT password_hash FROM administrators").fetchone()[0]
-    assert token != stored and PASSWORD not in encoded
-    client.headers.pop("X-CSRF-Token")
-    assert client.post("/api/auth/logout").status_code == 403
-    session = client.get("/api/auth/session").json()
-    client.headers["X-CSRF-Token"] = session["csrf_token"]
-    assert client.post("/api/auth/logout").status_code == 204
-    client.cookies.set(COOKIE, token, path="/api")
-    assert client.get("/api/users").status_code == 401
-
-
-def test_cookie_flags_and_origin(environment):
+def test_local_origin_and_host_boundary(environment):
     client, _, _ = environment
-    response = client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
-    cookie = response.headers["set-cookie"].lower()
-    assert "httponly" in cookie and "samesite=strict" in cookie
     assert (
-        client.post(
-            "/api/auth/login",
-            headers={"Origin": "https://hostil.example"},
-            json={"username": "admin", "password": PASSWORD},
-        ).status_code
+        client.post("/api/users", headers={"Origin": "https://hostil.example"}, json={}).status_code
         == 403
     )
     assert client.get("/api/users", headers={"Host": "hostil.example"}).status_code == 400
 
 
-def test_expired_session_denied(signed):
-    client, app, _ = signed
-    with app.state.database.connect(write=True) as connection:
-        connection.execute("UPDATE sessions SET expires_at=0")
-    assert client.get("/api/users").status_code == 401
-
-
-def test_repeated_invalid_login_is_limited(environment):
+def test_user_crud_multidivision_and_conflict(environment):
     client, _, _ = environment
-    for _ in range(5):
-        assert (
-            client.post(
-                "/api/auth/login", json={"username": "admin", "password": "errada"}
-            ).status_code
-            == 401
-        )
-    assert (
-        client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD}).status_code
-        == 429
-    )
-
-
-def test_user_crud_multidivision_and_conflict(signed):
-    client, _, _ = signed
     create(client, level=2, divisions=["a", "b"])
     assert client.get("/api/users").json()["items"][0]["divisions"] == ["a", "b"]
     assert (
@@ -181,16 +131,16 @@ def test_user_crud_multidivision_and_conflict(signed):
         {"level": 2, "divisions": [" "]},
     ],
 )
-def test_invalid_permissions_rejected(signed, values):
-    client, _, _ = signed
+def test_invalid_permissions_rejected(environment, values):
+    client, _, _ = environment
     response = client.post(
         "/api/users", json={"subject_id": "a", "display_name": "Teste", **values}
     )
     assert response.status_code == 422
 
 
-def test_enrollment_requires_consent_quality_and_no_biometric_response(signed):
-    client, app, pipeline = signed
+def test_enrollment_requires_consent_quality_and_no_biometric_response(environment):
+    client, app, pipeline = environment
     create(client)
     assert (
         client.post(
@@ -208,16 +158,16 @@ def test_enrollment_requires_consent_quality_and_no_biometric_response(signed):
     assert b'"samples"' not in app.state.database.path.read_bytes()
 
 
-def test_duplicate_face_rejected(signed):
-    client, _, _ = signed
+def test_duplicate_face_rejected(environment):
+    client, _, _ = environment
     create(client, "a")
     assert enroll(client, "a").status_code == 200
     create(client, "b")
     assert enroll(client, "b").status_code == 409
 
 
-def test_permission_changes_are_effective_and_attempts_persist(signed):
-    client, app, _ = signed
+def test_permission_changes_are_effective_and_attempts_persist(environment):
+    client, app, _ = environment
     create(client, level=2, divisions=["a", "b"])
     assert enroll(client).status_code == 200
     first = attempt(client, app, 2, "b")
@@ -239,8 +189,8 @@ def test_permission_changes_are_effective_and_attempts_persist(signed):
     }
 
 
-def test_unknown_no_face_and_multiple_faces_denied(signed):
-    client, app, pipeline = signed
+def test_unknown_no_face_and_multiple_faces_denied(environment):
+    client, app, pipeline = environment
     assert attempt(client, app).json()["reason"] == "sem_referencias"
     create(client)
     assert enroll(client).status_code == 200
@@ -252,8 +202,8 @@ def test_unknown_no_face_and_multiple_faces_denied(signed):
         assert result["reason"] == status.value and not result["granted"]
 
 
-def test_delete_invalidates_references_and_anonymizes_history(signed):
-    client, app, _ = signed
+def test_delete_invalidates_references_and_anonymizes_history(environment):
+    client, app, _ = environment
     create(client)
     assert enroll(client).status_code == 200
     assert attempt(client, app).json()["subject_id"] == "voluntario"
@@ -262,8 +212,8 @@ def test_delete_invalidates_references_and_anonymizes_history(signed):
     assert attempt(client, app).json()["reason"] == "sem_referencias"
 
 
-def test_revoke_biometrics_retains_user(signed):
-    client, app, _ = signed
+def test_revoke_biometrics_retains_user(environment):
+    client, app, _ = environment
     create(client)
     assert enroll(client).status_code == 200
     assert client.delete("/api/users/voluntario/biometrics").status_code == 204
@@ -271,8 +221,8 @@ def test_revoke_biometrics_retains_user(signed):
     assert attempt(client, app).json()["reason"] == "sem_referencias"
 
 
-def test_audit_failure_never_returns_grant(signed):
-    client, app, _ = signed
+def test_audit_failure_never_returns_grant(environment):
+    client, app, _ = environment
     create(client)
     assert enroll(client).status_code == 200
     with app.state.database.connect(write=True) as connection:
@@ -285,8 +235,8 @@ def test_audit_failure_never_returns_grant(signed):
     assert client.get("/api/attempts").json()["total"] == 0
 
 
-def test_engine_failure_is_denied_and_audited(signed):
-    client, app, pipeline = signed
+def test_engine_failure_is_denied_and_audited(environment):
+    client, app, pipeline = environment
     pipeline.failure = True
     response = attempt(client, app)
     assert response.status_code == 503
@@ -294,8 +244,8 @@ def test_engine_failure_is_denied_and_audited(signed):
     assert history[0]["reason"] == "falha_biometrica" and not history[0]["granted"]
 
 
-def test_validation_does_not_echo_sensitive_input(signed):
-    client, app, _ = signed
+def test_validation_does_not_echo_sensitive_input(environment):
+    client, app, _ = environment
     secret = "conteudo_biometrico_privado"
     response = client.post("/api/attempts", json={"image": secret, "requested_level": 4})
     assert response.status_code == 422 and secret not in response.text
@@ -304,8 +254,8 @@ def test_validation_does_not_echo_sensitive_input(signed):
     assert secret not in client.get("/api/attempts").text
 
 
-def test_import_legacy_preserves_permissions_and_moves_references(signed, tmp_path):
-    client, app, _ = signed
+def test_import_legacy_preserves_permissions_and_moves_references(environment, tmp_path):
+    client, app, _ = environment
     legacy = Gallery(tmp_path)
     legacy.enroll("antigo", UserPermission(2, frozenset({"a", "b"})), [vector()] * 5, True)
     response = client.post("/api/legacy/import")
@@ -316,8 +266,8 @@ def test_import_legacy_preserves_permissions_and_moves_references(signed, tmp_pa
     assert client.post("/api/legacy/import").json()["imported"] == 0
 
 
-def test_import_conflict_never_erases_legacy(signed, tmp_path):
-    client, _, _ = signed
+def test_import_conflict_never_erases_legacy(environment, tmp_path):
+    client, _, _ = environment
     create(client, "antigo")
     legacy = Gallery(tmp_path)
     legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
@@ -325,22 +275,20 @@ def test_import_conflict_never_erases_legacy(signed, tmp_path):
     assert "antigo" in legacy.references()
 
 
-def test_persistence_survives_new_app(signed, tmp_path):
-    client, _, _ = signed
+def test_persistence_survives_new_app(environment, tmp_path):
+    client, _, _ = environment
     create(client)
     assert enroll(client).status_code == 200
     other = create_app(tmp_path, pipeline=ControlledPipeline())
     with TestClient(other, base_url="http://localhost") as restarted:
-        auth = restarted.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
-        restarted.headers["X-CSRF-Token"] = auth.json()["csrf_token"]
         assert restarted.get("/api/users").json()["total"] == 1
         assert restarted.post(
             "/api/attempts", json={"image": image(), "requested_level": 1}
         ).json()["granted"]
 
 
-def test_attempt_rate_limit(signed):
-    client, app, _ = signed
+def test_attempt_rate_limit(environment):
+    client, app, _ = environment
     assert attempt(client, app).status_code == 200
     assert (
         client.post("/api/attempts", json={"image": image(), "requested_level": 1}).status_code
@@ -348,8 +296,8 @@ def test_attempt_rate_limit(signed):
     )
 
 
-def test_oversized_body_and_bad_image_dimensions(signed):
-    client, _, _ = signed
+def test_oversized_body_and_bad_image_dimensions(environment):
+    client, _, _ = environment
     assert (
         client.post("/api/biometrics/analyze", content=b"x" * (8 * 1024 * 1024 + 1)).status_code
         == 413
@@ -366,18 +314,15 @@ def test_real_api_inference_without_face(tmp_path):
     if not all((DEFAULT_MODELS / spec["file"]).exists() for spec in MODELS.values()):
         pytest.skip("Modelos locais não instalados")
     app = create_app(tmp_path)
-    app.state.database.create_admin("admin", PASSWORD)
     with TestClient(app, base_url="http://localhost") as client:
-        auth = client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
-        client.headers["X-CSRF-Token"] = auth.json()["csrf_token"]
         result = attempt(client, app)
         assert result.status_code == 200
         assert result.json()["reason"] == "nenhum_rosto"
         assert not result.json()["granted"]
 
 
-def test_missing_biometric_key_denies_and_audits(signed):
-    client, app, _ = signed
+def test_missing_biometric_key_denies_and_audits(environment):
+    client, app, _ = environment
     create(client)
     assert enroll(client).status_code == 200
     app.state.database.key_path.unlink()
@@ -387,14 +332,8 @@ def test_missing_biometric_key_denies_and_audits(signed):
     assert last["reason"] == "falha_biometrica" and not last["granted"]
 
 
-def test_bootstrap_admin_cannot_be_repeated(environment):
-    _, app, _ = environment
-    with pytest.raises(ValueError, match="não pode ser repetida"):
-        app.state.database.create_admin("outro_admin", PASSWORD)
-
-
-def test_import_cleanup_retry_is_idempotent(signed, tmp_path, monkeypatch):
-    client, _, _ = signed
+def test_import_cleanup_retry_is_idempotent(environment, tmp_path, monkeypatch):
+    client, _, _ = environment
     legacy = Gallery(tmp_path)
     legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
     original = Gallery._change
@@ -413,17 +352,54 @@ def test_import_cleanup_retry_is_idempotent(signed, tmp_path, monkeypatch):
     assert legacy.references() == {}
 
 
-def test_delete_missing_user_does_not_erase_legacy(signed, tmp_path):
-    client, _, _ = signed
+def test_delete_missing_user_does_not_erase_legacy(environment, tmp_path):
+    client, _, _ = environment
     legacy = Gallery(tmp_path)
     legacy.enroll("antigo", UserPermission(1), [vector()] * 5, True)
     assert client.delete("/api/users/antigo").status_code == 404
     assert "antigo" in legacy.references()
 
 
-def test_openapi_describes_cookie_and_csrf_as_joint_requirement(environment):
+def test_openapi_has_no_administrative_authentication(environment):
     _, app, _ = environment
     schema = app.openapi()
-    assert schema["paths"]["/api/users"]["post"]["security"] == [
-        {"APIKeyCookie": [], "APIKeyHeader": []}
-    ]
+    assert "securitySchemes" not in schema.get("components", {})
+    assert all(not path.startswith("/api/auth/") for path in schema["paths"])
+    assert "security" not in schema["paths"]["/api/users"]["post"]
+
+
+def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
+    from sentinela.database import Database
+
+    database = Database(tmp_path)
+    tmp_path.mkdir(exist_ok=True)
+    with database.connect() as connection:
+        migration = Path(__file__).parents[1] / "sentinela/migrations/001_initial.sql"
+        connection.executescript(migration.read_text("utf-8"))
+        database.insert_user(connection, "preservado", "Usuário", 1, True, [])
+        connection.execute("INSERT INTO administrators VALUES ('antigo', 'hash-legado', 'data')")
+        connection.execute(
+            "INSERT INTO biometric_references VALUES ('preservado', 'modelo', ?, 5, 'data')",
+            (b"referencias-cifradas-preservadas",),
+        )
+        connection.execute(
+            "INSERT INTO attempts (occurred_at, subject_id, requested_level, granted, "
+            "reason, elapsed_ms, model_id, config_json) "
+            "VALUES ('data', 'preservado', 1, 1, 'acesso_autorizado', 2, 'modelo', '{}')"
+        )
+    database.initialize()
+    database.initialize()
+    with database.connect() as connection:
+        assert database.user(connection, "preservado")["level"] == 1
+        assert (
+            connection.execute("SELECT encrypted_samples FROM biometric_references").fetchone()[0]
+            == b"referencias-cifradas-preservadas"
+        )
+        assert connection.execute("SELECT subject_id FROM attempts").fetchone()[0] == "preservado"
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert not tables & {"administrators", "sessions", "login_failures"}
+        assert {"users", "biometric_references", "attempts"} <= tables
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2

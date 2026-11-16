@@ -12,13 +12,6 @@ class Input(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
 
 
-class Login(Input):
-    username: str = Field(min_length=3, max_length=40)
-    password: str = Field(min_length=1, max_length=128)
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-
 class UserUpdate(Input):
     display_name: str = Field(min_length=1, max_length=100)
     level: Literal[1, 2, 3]
@@ -86,12 +79,6 @@ class AttemptInput(ImageInput):
 
 class ErrorResponse(BaseModel):
     detail: str
-
-
-class SessionResponse(BaseModel):
-    username: str
-    csrf_token: str
-    expires_at: float
 
 
 class UserResponse(BaseModel):

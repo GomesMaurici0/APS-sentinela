@@ -13,15 +13,11 @@ No PowerShell, na raiz do projeto:
 ```
 
 Abra http://127.0.0.1:8000. Ctrl+C encerra. Para outra porta, acrescente --port 8001.
-Se ainda não existir administrador, crie uma única vez:
-
-```powershell
-.\.venv-local\Scripts\python.exe -m sentinela.cli admin-create --username admin
-```
-
-A senha é solicitada no terminal (12 a 128 caracteres). Não há senha padrão.
-Não apague o banco ou a chave para tentar recuperar uma senha.
-Configuração da IDE: [PyCharm](../APS-Sentinela-Materiais/docs/pycharm.txt).
+O painel abre diretamente no terminal, sem usuário ou senha administrativa.
+A API também dispensa sessão e token CSRF; o acesso ao painel depende do computador local.
+A biometria e as permissões dos três níveis continuam sendo avaliadas pelo backend.
+Não apague o banco ou a chave biométrica.
+Configuração da IDE: [PyCharm](docs/pycharm.txt).
 
 ## Preparar o ambiente
 
@@ -75,6 +71,8 @@ pessoas nem substituem a validação com webcam e participantes.
 - backend/tests: testes automatizados, incluindo a API.
 - frontend: interface e configuração de compilação.
 - models: modelos locais, manifesto e licenças.
+- docs: documentação técnica e material acadêmico de referência.
+- output: documentos da apresentação e relatórios já produzidos.
 - .run: configurações opcionais de execução no PyCharm.
 
 O laboratório de webcam em Python continua disponível por compatibilidade com os
@@ -82,7 +80,6 @@ cadastros anteriores: python -m sentinela.cli camera (usando o interpretador loc
 Ele usa gallery.db, separado do painel, e não registra auditoria.
 Veja os demais comandos com python -m sentinela.cli --help.
 
-A documentação fica fora do projeto, em ../APS-Sentinela-Materiais/docs.
 Os documentos acadêmicos e relatórios antigos registram etapas anteriores. Para
 instalação e execução atuais, siga este README. Orientação recebida em 09/11/2026:
-a avaliação será uma apresentação.
+a avaliação será uma apresentação. Roteiro: output/docx/SENTINELA_Guia_Apresentacao.txt.

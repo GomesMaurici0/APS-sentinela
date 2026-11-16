@@ -1,12 +1,10 @@
-import secrets
 import sqlite3
 from pathlib import Path
 
 import numpy as np
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import APIKeyCookie, APIKeyHeader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from sentinela.access_service import AccessService, attempt_record
@@ -24,8 +22,6 @@ from sentinela.schemas import (
     ErrorResponse,
     ImageInput,
     ImportResponse,
-    Login,
-    SessionResponse,
     StatsResponse,
     UserCreate,
     UserPage,
@@ -33,7 +29,6 @@ from sentinela.schemas import (
     UserUpdate,
 )
 
-COOKIE = "sentinela_session"
 DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
@@ -99,7 +94,7 @@ class LocalBoundary:
 
 
 def create_app(
-        directory: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
+    directory: Path | None = None, models: Path = DEFAULT_MODELS, pipeline=None
 ) -> FastAPI:
     directory = directory or data_directory()
     database = Database(directory)
@@ -119,7 +114,6 @@ def create_app(
             "auto_configure": False,
         },
         responses={
-            401: {"model": ErrorResponse},
             403: {"model": ErrorResponse},
             422: {"model": ErrorResponse},
             503: {"model": ErrorResponse},
@@ -129,16 +123,6 @@ def create_app(
     app.state.access = service
     app.add_middleware(LocalBoundary)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
-    cookie = APIKeyCookie(name=COOKIE, auto_error=False)
-    csrf_header = APIKeyHeader(name="X-CSRF-Token", auto_error=False)
-
-    def authenticated(token: str | None = Depends(cookie)):
-        return database.session(token)
-
-    def mutating(session=Depends(authenticated), csrf: str | None = Depends(csrf_header)):
-        if not csrf or not secrets.compare_digest(csrf, session["csrf_token"]):
-            raise DomainError(403, "Token de proteção ausente ou inválido. Atualize a sessão.")
-        return session
 
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, error: DomainError):
@@ -153,41 +137,16 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
-        # Nunca ecoar input, senha, base64 ou contexto de exceções de validação.
+        # Nunca ecoar input, base64 ou contexto de exceções de validação.
         return JSONResponse(
             {"detail": "Dados inválidos. Confira os campos e o formato das imagens."},
             status_code=422,
         )
 
-    @app.post("/api/auth/login", response_model=SessionResponse, tags=["Autenticação"])
-    def login(body: Login, response: Response):
-        token, session = database.login(body.username, body.password)
-        response.set_cookie(
-            COOKIE,
-            token,
-            max_age=8 * 60 * 60,
-            httponly=True,
-            samesite="strict",
-            secure=False,
-            path="/api",
-        )
-        return session
-
-    @app.get("/api/auth/session", response_model=SessionResponse, tags=["Autenticação"])
-    def session_info(session=Depends(authenticated)):
-        return session
-
-    @app.post("/api/auth/logout", status_code=204, tags=["Autenticação"])
-    def logout(response: Response, session=Depends(mutating)):
-        with database.connect(write=True) as connection:
-            connection.execute("DELETE FROM sessions WHERE token_hash=?", (session["token_hash"],))
-        response.delete_cookie(COOKIE, path="/api", httponly=True, samesite="strict")
-
     @app.get("/api/users", response_model=UserPage, tags=["Usuários"])
     def list_users(
-            offset: int = Query(0, ge=0),
-            limit: int = Query(50, ge=1, le=100),
-            session=Depends(authenticated),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=100),
     ):
         with database.connect() as connection:
             total = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -198,7 +157,7 @@ def create_app(
         return {"items": items, "total": total, "offset": offset, "limit": limit}
 
     @app.post("/api/users", status_code=201, response_model=UserResponse, tags=["Usuários"])
-    def create_user(body: UserCreate, session=Depends(mutating)):
+    def create_user(body: UserCreate):
         with database.connect(write=True) as connection:
             database.insert_user(
                 connection,
@@ -211,12 +170,12 @@ def create_app(
             return database.user(connection, body.subject_id)
 
     @app.get("/api/users/{subject_id}", response_model=UserResponse, tags=["Usuários"])
-    def get_user(subject_id: str, session=Depends(authenticated)):
+    def get_user(subject_id: str):
         with database.connect() as connection:
             return database.user(connection, subject_id)
 
     @app.put("/api/users/{subject_id}", response_model=UserResponse, tags=["Usuários"])
-    def update_user(subject_id: str, body: UserUpdate, session=Depends(mutating)):
+    def update_user(subject_id: str, body: UserUpdate):
         with database.connect(write=True) as connection:
             database.user(connection, subject_id)
             connection.execute(
@@ -241,7 +200,7 @@ def create_app(
             raise DomainError(503, "Não foi possível excluir a cópia do laboratório.") from error
 
     @app.delete("/api/users/{subject_id}", status_code=204, tags=["Usuários"])
-    def delete_user(subject_id: str, session=Depends(mutating)):
+    def delete_user(subject_id: str):
         with database.connect() as connection:
             database.user(connection, subject_id)
         purge_legacy(subject_id)
@@ -250,13 +209,13 @@ def create_app(
             connection.execute("DELETE FROM users WHERE subject_id=?", (subject_id,))
 
     @app.post("/api/users/{subject_id}/biometrics", response_model=UserResponse, tags=["Biometria"])
-    def enroll(subject_id: str, body: Enrollment, session=Depends(mutating)):
+    def enroll(subject_id: str, body: Enrollment):
         service.enroll(subject_id, body.images)
         with database.connect() as connection:
             return database.user(connection, subject_id)
 
     @app.delete("/api/users/{subject_id}/biometrics", status_code=204, tags=["Biometria"])
-    def delete_biometrics(subject_id: str, session=Depends(mutating)):
+    def delete_biometrics(subject_id: str):
         with database.connect() as connection:
             database.user(connection, subject_id)
         purge_legacy(subject_id)
@@ -270,19 +229,18 @@ def create_app(
             )
 
     @app.post("/api/biometrics/analyze", response_model=CaptureResponse, tags=["Biometria"])
-    def analyze(body: ImageInput, session=Depends(mutating)):
+    def analyze(body: ImageInput):
         return service.analyze(body.image)
 
     @app.post("/api/attempts", response_model=DecisionResponse, tags=["Acessos"])
-    def attempt(body: AttemptInput, session=Depends(mutating)):
+    def attempt(body: AttemptInput):
         return service.attempt(body.image, body.requested_level, body.division)
 
     @app.get("/api/attempts", response_model=AttemptPage, tags=["Acessos"])
     def list_attempts(
-            offset: int = Query(0, ge=0),
-            limit: int = Query(50, ge=1, le=100),
-            granted: bool | None = None,
-            session=Depends(authenticated),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=100),
+        granted: bool | None = None,
     ):
         where = " WHERE granted=?" if granted is not None else ""
         params = (int(granted),) if granted is not None else ()
@@ -302,7 +260,7 @@ def create_app(
         }
 
     @app.get("/api/stats", response_model=StatsResponse, tags=["Acessos"])
-    def stats(session=Depends(authenticated)):
+    def stats():
         with database.connect() as connection:
             users = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             enrolled = connection.execute("SELECT COUNT(*) FROM biometric_references").fetchone()[0]
@@ -318,7 +276,7 @@ def create_app(
         }
 
     @app.post("/api/legacy/import", response_model=ImportResponse, tags=["Usuários"])
-    def import_legacy(session=Depends(mutating)):
+    def import_legacy():
         legacy = Gallery(directory)
         try:
             records = legacy.read()["subjects"]
@@ -347,9 +305,9 @@ def create_app(
                         for a, b in zip(existing_samples, record["samples"][:5], strict=True)
                     )
                     if (
-                            user["consent_version"] != "laboratorio-v1"
-                            or user["consent_at"] != record["consent_at"]
-                            or not same_samples
+                        user["consent_version"] != "laboratorio-v1"
+                        or user["consent_at"] != record["consent_at"]
+                        or not same_samples
                     ):
                         raise DomainError(
                             409,
@@ -393,7 +351,7 @@ def create_app(
         return {"imported": imported, "already_present": already_present}
 
     @app.get("/api/openapi.json", include_in_schema=False)
-    def openapi(session=Depends(authenticated)):
+    def openapi():
         return app.openapi()
 
     @app.get("/{path:path}", include_in_schema=False)
@@ -412,20 +370,4 @@ def create_app(
             )
         return FileResponse(root / "index.html")
 
-    generate_openapi = app.openapi
-
-    def contracted_openapi():
-        schema = generate_openapi()
-        for path in schema["paths"].values():
-            for operation in path.values():
-                if not isinstance(operation, dict):
-                    continue
-                # FastAPI representa esquemas de segurança separados como alternativas.
-                # Neste contrato, cookie E CSRF são exigidos nas mutações autenticadas.
-                security = operation.get("security", [])
-                if any("APIKeyHeader" in option for option in security):
-                    operation["security"] = [{"APIKeyCookie": [], "APIKeyHeader": []}]
-        return schema
-
-    app.openapi = contracted_openapi
     return app

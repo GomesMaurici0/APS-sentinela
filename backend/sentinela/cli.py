@@ -1,6 +1,6 @@
+"""Comandos do laboratório biométrico e do servidor local do painel."""
 
 import argparse
-import getpass
 import json
 import sqlite3
 import sys
@@ -125,16 +125,14 @@ def camera(args, pipeline: FacePipeline, gallery: Gallery):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="SENTINELA — laboratório biométrico local")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("download-models", "doctor", "camera", "delete", "admin-create", "serve"):
+    for command in ("download-models", "doctor", "camera", "delete", "serve"):
         child = sub.add_parser(command)
-        if command not in ("delete", "admin-create"):
+        if command != "delete":
             from pathlib import Path
 
             child.add_argument("--models", type=Path, default=DEFAULT_MODELS)
         if command == "delete":
             child.add_argument("subject")
-        if command == "admin-create":
-            child.add_argument("--username", default="admin")
         if command == "serve":
             child.add_argument("--port", type=int, default=8000)
         if command == "camera":
@@ -149,29 +147,13 @@ def main(argv=None) -> int:
             child.add_argument("--margin", type=float, default=0.08)
     args = parser.parse_args(argv)
     try:
-        if args.command == "admin-create":
-            from sentinela.database import Database
-
-            password = getpass.getpass("Senha administrativa (12 a 128 caracteres): ")
-            confirmation = getpass.getpass("Confirme a senha: ")
-            if password != confirmation:
-                raise ValueError("As senhas não coincidem.")
-            Database(data_directory()).create_admin(args.username, password)
-            print("Administrador criado. A senha não foi registrada em logs.")
-        elif args.command == "serve":
+        if args.command == "serve":
             import uvicorn
 
             from sentinela.api import create_app
-            from sentinela.database import Database
 
             if not 1 <= args.port <= 65535:
                 raise ValueError("Porta inválida.")
-            database = Database(data_directory())
-            database.initialize()
-            with database.connect() as connection:
-                count = connection.execute("SELECT COUNT(*) FROM administrators").fetchone()[0]
-            if count == 0:
-                raise ValueError("Crie o administrador: python -m sentinela.cli admin-create")
             print(f"Abra http://127.0.0.1:{args.port} no navegador. Ctrl+C encerra.")
             uvicorn.run(
                 create_app(models=args.models),
