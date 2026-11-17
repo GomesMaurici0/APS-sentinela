@@ -88,3 +88,5 @@ a avaliação será uma apresentação. Roteiro: output/docx/SENTINELA_Guia_Apre
 
 Guia de nomes em português e ordem de leitura: docs/nomes-em-portugues.md.
 Reinicie a execução na IDE após atualizar o código.
+
+Tabelas em português e consultas de exemplo: docs/tabelas-do-banco.md.

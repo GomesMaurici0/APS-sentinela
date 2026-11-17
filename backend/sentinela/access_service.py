@@ -175,7 +175,7 @@ class AccessService:
                     decisao = AccessDecision(False, "falha_biometrica")
             tempo_ms = round((time.perf_counter() - inicio) * 1000, 2)
             cursor_sql = conexao.execute(
-                "INSERT INTO attempts (occurred_at, subject_id, requested_level, "
+                "INSERT INTO tentativas_acesso (occurred_at, subject_id, requested_level, "
                 "division, granted, "
                 "reason, similarity, margin, elapsed_ms, model_id, config_json) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -194,7 +194,7 @@ class AccessService:
                 ),
             )
             linha = conexao.execute(
-                "SELECT * FROM attempts WHERE id=?", (cursor_sql.lastrowid,)
+                "SELECT * FROM tentativas_acesso WHERE id=  ?", (cursor_sql.lastrowid,)
             ).fetchone()
             saida = registro_tentativa(linha)
         if falha_motor:

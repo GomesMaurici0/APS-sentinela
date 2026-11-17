@@ -47,7 +47,7 @@ class Database:
         self.directory.mkdir(parents=True, exist_ok=True)
         with self.conectar() as conexao:
             versao = conexao.execute("PRAGMA user_version").fetchone()[0]
-            if versao > 2:
+            if versao > 3:
                 raise ValueError("Banco foi criado por uma versão mais recente do sistema.")
             if versao == 0:
                 migracao = Path(__file__).parent / "migrations" / "001_initial.sql"
@@ -55,13 +55,16 @@ class Database:
             if versao < 2:
                 migracao = Path(__file__).parent / "migrations" / "002_remove_admin_auth.sql"
                 conexao.executescript("BEGIN IMMEDIATE;\n" + migracao.read_text("utf-8"))
+            if versao < 3:
+                migracao = Path(__file__).parent / "migrations" / "003_tabelas_em_portugues.sql"
+                conexao.executescript("BEGIN IMMEDIATE;\n" + migracao.read_text("utf-8"))
 
     def cifrador(self) -> Fernet:
         with self._key_lock:
             if not self.key_path.exists():
                 with self.conectar() as conexao:
                     quantidade = conexao.execute(
-                        "SELECT COUNT(*) FROM biometric_references"
+                        "SELECT COUNT(*) FROM referencias_biometricas"
                     ).fetchone()[0]
                 if quantidade:
                     raise DomainError(503, "Chave biométrica ausente. Operação interrompida.")
@@ -82,7 +85,7 @@ class Database:
         return self.cifrador().encrypt(json.dumps(vetores, allow_nan=False).encode())
 
     def obter_referencias(self, conexao) -> dict[str, list[np.ndarray]]:
-        linhas = conexao.execute("SELECT * FROM biometric_references").fetchall()
+        linhas = conexao.execute("SELECT * FROM referencias_biometricas").fetchall()
         if not linhas:
             return {}
         cifrador = self.cifrador()
@@ -106,7 +109,7 @@ class Database:
     @staticmethod
     def obter_usuario(conexao, identificador: str) -> dict:
         linha = conexao.execute(
-            "SELECT * FROM users WHERE subject_id=?", (identificador,)
+            "SELECT * FROM usuarios WHERE subject_id=?", (identificador,)
         ).fetchone()
         if linha is None:
             raise DomainError(404, "Usuário não encontrado.")
@@ -115,34 +118,32 @@ class Database:
         valor["divisions"] = [
             item[0]
             for item in conexao.execute(
-                "SELECT division FROM user_divisions WHERE subject_id=? ORDER BY division",
+                "SELECT division FROM divisoes_usuarios WHERE subject_id=? ORDER BY division",
                 (identificador,),
             )
         ]
         referencia = conexao.execute(
-            "SELECT sample_count FROM biometric_references WHERE subject_id=?", (identificador,)
+            "SELECT sample_count FROM referencias_biometricas WHERE subject_id=?", (identificador,)
         ).fetchone()
         valor["sample_count"] = referencia[0] if referencia else 0
         return valor
 
     @staticmethod
     def obter_permissao(usuario: dict) -> UserPermission:
-        return UserPermission(
-            usuario["level"], frozenset(usuario["divisions"]), usuario["active"]
-        )
+        return UserPermission(usuario["level"], frozenset(usuario["divisions"]), usuario["active"])
 
     @staticmethod
     def inserir_usuario(conexao, identificador, nome_exibicao, nivel, ativo, divisoes):
         instante = agora()
         try:
             conexao.execute(
-                "INSERT INTO users VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
+                "INSERT INTO usuarios VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
                 (identificador, nome_exibicao, nivel, int(ativo), instante, instante),
             )
         except sqlite3.IntegrityError as erro:
             raise DomainError(409, "Identificador já cadastrado.") from erro
         conexao.executemany(
-            "INSERT INTO user_divisions VALUES (?, ?)",
+            "INSERT INTO divisoes_usuarios VALUES (?, ?)",
             [(identificador, divisao) for divisao in divisoes],
         )
 
@@ -155,10 +156,10 @@ class Database:
         versao_consentimento="cadastro-v1",
     ):
         conexao.execute(
-            "INSERT OR REPLACE INTO biometric_references VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO referencias_biometricas VALUES (?, ?, ?, ?, ?)",
             (identificador, MODEL_ID, conteudo_cifrado, 5, agora()),
         )
         conexao.execute(
-            "UPDATE users SET consent_at=?, consent_version=?, updated_at=? WHERE subject_id=?",
+            "UPDATE usuarios SET consent_at=?, consent_version=?, updated_at=? WHERE subject_id=?",
             (data_consentimento or agora(), versao_consentimento, agora(), identificador),
         )

@@ -155,9 +155,10 @@ def criar_aplicacao(
         limit: int = Query(50, ge=1, le=100),
     ):
         with banco.conectar() as conexao:
-            total = conexao.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            total = conexao.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
             identificadores = conexao.execute(
-                "SELECT subject_id FROM users ORDER BY subject_id LIMIT ? OFFSET ?", (limit, offset)
+                "SELECT subject_id FROM usuarios ORDER BY subject_id LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
             itens = [banco.obter_usuario(conexao, linha[0]) for linha in identificadores]
         return {"items": itens, "total": total, "offset": offset, "limit": limit}
@@ -204,13 +205,13 @@ def criar_aplicacao(
         with banco.conectar(write=True) as conexao:
             banco.obter_usuario(conexao, subject_id)
             conexao.execute(
-                "UPDATE users SET display_name=?, level=?, active=?, updated_at=? "
+                "UPDATE usuarios SET display_name=?, level=?, active=?, updated_at=? "
                 "WHERE subject_id=?",
                 (corpo.display_name, corpo.level, int(corpo.active), agora(), subject_id),
             )
-            conexao.execute("DELETE FROM user_divisions WHERE subject_id=?", (subject_id,))
+            conexao.execute("DELETE FROM divisoes_usuarios WHERE subject_id=?", (subject_id,))
             conexao.executemany(
-                "INSERT INTO user_divisions VALUES (?, ?)",
+                "INSERT INTO divisoes_usuarios VALUES (?, ?)",
                 [(subject_id, divisao) for divisao in corpo.divisions],
             )
             return banco.obter_usuario(conexao, subject_id)
@@ -237,7 +238,7 @@ def criar_aplicacao(
         limpar_galeria_legada(subject_id)
         with banco.conectar(write=True) as conexao:
             banco.obter_usuario(conexao, subject_id)
-            conexao.execute("DELETE FROM users WHERE subject_id=?", (subject_id,))
+            conexao.execute("DELETE FROM usuarios WHERE subject_id=?", (subject_id,))
 
     @aplicacao.post(
         "/api/users/{subject_id}/biometrics",
@@ -264,9 +265,9 @@ def criar_aplicacao(
         limpar_galeria_legada(subject_id)
         with banco.conectar(write=True) as conexao:
             banco.obter_usuario(conexao, subject_id)
-            conexao.execute("DELETE FROM biometric_references WHERE subject_id=?", (subject_id,))
+            conexao.execute("DELETE FROM referencias_biometricas WHERE subject_id=?", (subject_id,))
             conexao.execute(
-                "UPDATE users SET consent_at=NULL, consent_version=NULL, updated_at=? "
+                "UPDATE usuarios SET consent_at=NULL, consent_version=NULL, updated_at=? "
                 "WHERE subject_id=?",
                 (agora(), subject_id),
             )
@@ -307,10 +308,12 @@ def criar_aplicacao(
         parametros = (int(granted),) if granted is not None else ()
         with banco.conectar() as conexao:
             total = conexao.execute(
-                "SELECT COUNT(*) FROM attempts" + condicao_sql, parametros
+                "SELECT COUNT(*) FROM tentativas_acesso" + condicao_sql, parametros
             ).fetchone()[0]
             linhas = conexao.execute(
-                "SELECT * FROM attempts" + condicao_sql + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM tentativas_acesso"
+                + condicao_sql
+                + " ORDER BY id DESC LIMIT ? OFFSET ?",
                 (*parametros, limit, offset),
             ).fetchall()
         return {
@@ -329,10 +332,12 @@ def criar_aplicacao(
     )
     def consultar_indicadores():
         with banco.conectar() as conexao:
-            usuarios = conexao.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            cadastrados = conexao.execute("SELECT COUNT(*) FROM biometric_references").fetchone()[0]
+            usuarios = conexao.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+            cadastrados = conexao.execute(
+                "SELECT COUNT(*) FROM referencias_biometricas"
+            ).fetchone()[0]
             tentativas, granted = conexao.execute(
-                "SELECT COUNT(*), COALESCE(SUM(granted),0) FROM attempts"
+                "SELECT COUNT(*), COALESCE(SUM(granted),0) FROM tentativas_acesso"
             ).fetchone()
         return {
             "users": usuarios,
@@ -367,7 +372,7 @@ def criar_aplicacao(
         with banco.conectar(write=True) as conexao:
             for subject_id, registro in registros.items():
                 existente = conexao.execute(
-                    "SELECT 1 FROM users WHERE subject_id=?", (subject_id,)
+                    "SELECT 1 FROM usuarios WHERE subject_id=?", (subject_id,)
                 ).fetchone()
                 if existente:
                     # Somente a mesma referência previamente importada pode concluir limpeza

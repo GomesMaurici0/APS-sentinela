@@ -227,7 +227,7 @@ def test_audit_failure_never_returns_grant(environment):
     assert cadastrar_biometria(client).status_code == 200
     with app.state.database.conectar(write=True) as connection:
         connection.executescript(
-            "CREATE TRIGGER audit_failure BEFORE INSERT ON attempts "
+            "CREATE TRIGGER audit_failure BEFORE INSERT ON tentativas_acesso "
             "BEGIN SELECT RAISE(ABORT, 'falha'); END;"
         )
     response = avaliar_acesso(client, app)
@@ -378,7 +378,10 @@ def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
     with database.conectar() as connection:
         migration = Path(__file__).parents[1] / "sentinela/migrations/001_initial.sql"
         connection.executescript(migration.read_text("utf-8"))
-        database.inserir_usuario(connection, "preservado", "Usuário", 1, True, [])
+        connection.execute(
+            "INSERT INTO users VALUES (?, ?, 1, 1, NULL, NULL, ?, ?)",
+            ("preservado", "Usuário", "data", "data"),
+        )
         connection.execute("INSERT INTO administrators VALUES ('antigo', 'hash-legado', 'data')")
         connection.execute(
             "INSERT INTO biometric_references VALUES ('preservado', 'modelo', ?, 5, 'data')",
@@ -394,14 +397,19 @@ def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
     with database.conectar() as connection:
         assert database.obter_usuario(connection, "preservado")["level"] == 1
         assert (
-            connection.execute("SELECT encrypted_samples FROM biometric_references").fetchone()[0]
+            connection.execute("SELECT encrypted_samples FROM referencias_biometricas").fetchone()[
+                0
+            ]
             == b"referencias-cifradas-preservadas"
         )
-        assert connection.execute("SELECT subject_id FROM attempts").fetchone()[0] == "preservado"
+        assert (
+            connection.execute("SELECT subject_id FROM tentativas_acesso").fetchone()[0]
+            == "preservado"
+        )
         tables = {
             row[0]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert not tables & {"administrators", "sessions", "login_failures"}
-        assert {"users", "biometric_references", "attempts"} <= tables
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert {"usuarios", "referencias_biometricas", "tentativas_acesso"} <= tables
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
