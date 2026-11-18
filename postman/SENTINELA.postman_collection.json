@@ -1,0 +1,691 @@
+{
+  "info": {
+    "name": "SENTINELA — APS | API completa e demonstração",
+    "schema": "https://schema.postman.com/json/collection/v2.1.0/collection.json",
+    "description": "Collection derivada de backend/sentinela/api.py e schemas.py. Inclui todas as 13 operações concretas da API (12 no OpenAPI + o próprio contrato), mais a entrada HTML da SPA. Painel e API locais sem login administrativo, cookies de sessão ou CSRF. Execute as pastas em ordem para demonstrar cadastro, biometria, autorização e auditoria. Biometria real e importação legada são opcionais e ignoradas por padrão. As exclusões se limitam aos IDs demonstrativos. Testes sintéticos não medem acurácia. Erros: 403 origem, 404 cadastro inexistente, 409 conflito, 413 corpo >8 MiB, 422 entrada/captura inválida, 429 frequência, 503 motor/persistência. Veja postman/README.md e docs/estrategia-e-debug.md.\n\nGuia de leitura: endereco_base é o endereço local; identificador_usuario seleciona o cadastro demonstrativo; imagem_sem_rosto é um PNG sintético. Os nomes das variáveis e do código estão em português. O contrato HTTP mantém nomes como subject_id (identificador), display_name (nome de exibição), level (nível), divisions (divisões), active (ativo), image (imagem), images (amostras), consent (consentimento), requested_level (nível solicitado), division (divisão), granted (autorizado), reason (motivo), similarity (similaridade), margin (margem), elapsed_ms (tempo em milissegundos) e sample_count (quantidade de amostras). Tabelas atuais: usuarios, divisoes_usuarios, referencias_biometricas e tentativas_acesso. Não há login administrativo."
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const enderecoBase = pm.variables.get(\"endereco_base\");",
+          "if (!/^http:\\/\\/(127\\.0\\.0\\.1|localhost):\\d+$/.test(enderecoBase || \"\")) {",
+          "  throw new Error(\"Use um servidor local: http://127.0.0.1:8000\");",
+          "}",
+          "if (pm.info.requestName === \"01 Criar usuário de demonstração\") {",
+          "  pm.variables.set(\"identificador_usuario\", \"demo-postman-\" + Date.now());",
+          "}",
+          "if (pm.request.method === \"DELETE\" && !String(pm.variables.get(\"identificador_usuario\") || \"\").startsWith(\"demo-postman-\")) {",
+          "  pm.execution.skipRequest();",
+          "  throw new Error(\"Exclusões permitidas somente para IDs demo-postman- nesta collection.\");",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "endereco_base",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "identificador_usuario",
+      "value": "demo-postman-manual"
+    },
+    {
+      "key": "executar_biometria_real",
+      "value": "false"
+    },
+    {
+      "key": "executar_importacao_legada",
+      "value": "false"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Cadastro e permissões",
+      "item": [
+        {
+          "name": "01 Criar usuário de demonstração",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/users",
+            "description": "Cria somente metadados, sem biometria. Nível 2 exige pelo menos uma divisão. Níveis 1 e 3 exigem lista vazia. Retorna 409 se o ID já existir. O script cria um ID novo com prefixo demo-postman-.\n\nCódigo em português: criar_usuario → inserir_usuario.\nBanco SQLite: usuarios e divisoes_usuarios.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_id\": \"{{identificador_usuario}}\",\n  \"display_name\": \"Voluntário demonstração Postman\",\n  \"level\": 2,\n  \"divisions\": [\n    \"ambiental\"\n  ],\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"Usuário criado sem referências faciais\", () => pm.expect(pm.response.json().sample_count).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 Listar usuários",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/users?offset=0&limit=50",
+            "description": "Paginação: offset >= 0; limit entre 1 e 100. Retorna items, total, offset e limit.\n\nCódigo em português: listar_usuarios.\nBanco SQLite: usuarios, divisoes_usuarios e referencias_biometricas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Página contém itens e total\", () => {",
+                  "  const dados = pm.response.json();",
+                  "  pm.expect(dados.items).to.be.an(\"array\");",
+                  "  pm.expect(dados.total).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03 Consultar usuário",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}",
+            "description": "Consulta cadastro, permissões e quantidade de amostras, sem devolver vetores biométricos. ID ausente retorna 404.\n\nCódigo em português: consultar_usuario → obter_usuario.\nBanco SQLite: usuarios, divisoes_usuarios e referencias_biometricas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 Atualizar usuário",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}",
+            "description": "Substitui os campos editáveis; não é PATCH. Mantém nível 2 e divisão ambiental neste exemplo.\n\nCódigo em português: atualizar_usuario.\nBanco SQLite: usuarios e divisoes_usuarios.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"Voluntário demonstração Postman\",\n  \"level\": 2,\n  \"divisions\": [\n    \"ambiental\"\n  ],\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Processamento e cadastro facial",
+      "item": [
+        {
+          "name": "05 Analisar imagem sintética sem rosto",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/biometrics/analyze",
+            "description": "Usa PNG preto gerado localmente. Exercita o motor verdadeiro e deve resultar em nenhum_rosto, sem cadastrar biometria. HTTP 200 significa análise concluída, não rosto aceito.\n\nCódigo em português: analisar → decodificar_imagem → analisar.\nBanco SQLite: Não grava dados; analisa uma imagem sintética.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image\": \"{{imagem_sem_rosto}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Sem rosto detectado\", () => pm.expect(pm.response.json().status).to.eql(\"nenhum_rosto\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 Analisar captura real (manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/biometrics/analyze",
+            "description": "Opcional: configure executar_biometria_real=true e imagem_base64 localmente. JPEG/PNG base64 puro, sem data:image/...; até 1.048.576 caracteres. A resposta mostra qualidade e eventual região alinhada. Não sincronize imagens pessoais com a nuvem.\n\nCódigo em português: analisar → decodificar_imagem → analisar.\nBanco SQLite: Não grava dados; analisa uma captura real.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image\": \"{{imagem_base64}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.variables.get(\"executar_biometria_real\") !== \"true\") {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 Cadastrar cinco amostras (manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}/biometrics",
+            "description": "Opcional. Exige consentimento explícito e exatamente cinco imagens aprovadas do mesmo voluntário. Reprocessa tudo no servidor; salva referências cifradas e consentimento. Pode retornar 422 por qualidade e 409 por conflito biométrico. Não treina novamente o SFace. Defina as cinco variáveis somente localmente.\n\nCódigo em português: cadastrar_biometria → cifrar_amostras → salvar_amostras.\nBanco SQLite: usuarios e referencias_biometricas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consent\": true,\n  \"images\": [\n    \"{{amostra_1}}\",\n    \"{{amostra_2}}\",\n    \"{{amostra_3}}\",\n    \"{{amostra_4}}\",\n    \"{{amostra_5}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.variables.get(\"executar_biometria_real\") !== \"true\") {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Avaliação e auditoria",
+      "item": [
+        {
+          "name": "08 Avaliar acesso sem rosto",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/attempts",
+            "description": "Avalia imagem sintética com motor real. Deve negar e registrar o motivo. O HTTP 200 transporta tanto concessões quanto negações: consulte granted e reason. Aguarde pelo menos um segundo entre avaliações.\n\nCódigo em português: avaliar_acesso → analisar → identificar → autorizar.\nBanco SQLite: tentativas_acesso; consulta usuarios e referencias_biometricas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image\": \"{{imagem_sem_rosto}}\",\n  \"requested_level\": 1,\n  \"division\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Negação por ausência de rosto\", () => {",
+                  "  const dados = pm.response.json();",
+                  "  pm.expect(dados.granted).to.eql(false);",
+                  "  pm.expect(dados.vault).to.eql(null);",
+                  "  pm.expect(dados.reason).to.eql(\"nenhum_rosto\");",
+                  "  pm.expect(dados.id).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "09 Avaliar acesso real à divisão (manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/attempts",
+            "description": "Opcional. Executa identificação 1:N e depois autorização. Nível 2 exige division; nos níveis 1 e 3 ela deve ser null. Pontuação não é probabilidade. Depurar AccessService.avaliar_acesso → FacePipeline.analisar → identificar → autorizar → INSERT attempts.\n\nCódigo em português: avaliar_acesso → analisar → identificar → autorizar.\nBanco SQLite: tentativas_acesso; consulta usuarios, divisoes_usuarios e referencias_biometricas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image\": \"{{imagem_base64}}\",\n  \"requested_level\": 2,\n  \"division\": \"ambiental\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.variables.get(\"executar_biometria_real\") !== \"true\") {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10 Consultar histórico",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/attempts?offset=0&limit=50",
+            "description": "Tentativas em ordem decrescente de ID. Registra decisão, motivo, similaridade, margem e tempo; não armazena fotos no histórico.\n\nCódigo em português: listar_tentativas.\nBanco SQLite: tentativas_acesso."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Página contém itens e total\", () => {",
+                  "  const dados = pm.response.json();",
+                  "  pm.expect(dados.items).to.be.an(\"array\");",
+                  "  pm.expect(dados.total).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11 Filtrar acessos negados",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/attempts?granted=false&offset=0&limit=50",
+            "description": "O filtro granted aceita true ou false. Use para mostrar que negações também são auditadas.\n\nCódigo em português: listar_tentativas.\nBanco SQLite: tentativas_acesso, filtrada por granted=false."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Página contém itens e total\", () => {",
+                  "  const dados = pm.response.json();",
+                  "  pm.expect(dados.items).to.be.an(\"array\");",
+                  "  pm.expect(dados.total).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12 Consultar estatísticas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/stats",
+            "description": "Contagem de usuários, usuários com referências, tentativas, concessões e negações. Não representa acurácia facial.\n\nCódigo em português: consultar_indicadores.\nBanco SQLite: usuarios, referencias_biometricas e tentativas_acesso."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Tentativas = concessões + negações\", () => {",
+                  "  const dados = pm.response.json(); pm.expect(dados.attempts).to.eql(dados.granted + dados.denied);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Validações negativas",
+      "item": [
+        {
+          "name": "13 Rejeitar nível inválido",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/users",
+            "description": "Teste negativo: Pydantic rejeita nível 4 antes de gravar. Ajuda a explicar validação de entrada no backend.\n\nCódigo em português: Validação UserCreate antes de criar_usuario.\nBanco SQLite: Nenhuma gravação esperada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_id\": \"{{identificador_usuario}}\",\n  \"display_name\": \"Voluntário demonstração Postman\",\n  \"level\": 4,\n  \"divisions\": [\n    \"ambiental\"\n  ],\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "14 Rejeitar cadastro sem consentimento",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}/biometrics",
+            "description": "Teste negativo estrutural. consent=false e lista vazia devem retornar 422 sem processar rosto ou salvar referências.\n\nCódigo em português: Validação Enrollment antes de cadastrar_biometria.\nBanco SQLite: Nenhuma gravação esperada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consent\": false,\n  \"images\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "15 Rejeitar recurso sem divisão",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{endereco_base}}/api/attempts",
+            "description": "Nível 2 sem divisão é uma entrada inválida; não equivale a uma tentativa biométrica registrada.\n\nCódigo em português: Validação AttemptInput antes de avaliar_acesso.\nBanco SQLite: Nenhuma gravação esperada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image\": \"{{imagem_sem_rosto}}\",\n  \"requested_level\": 2,\n  \"division\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 Contrato, interface e migração",
+      "item": [
+        {
+          "name": "16 Obter contrato OpenAPI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/api/openapi.json",
+            "description": "Contrato gerado do FastAPI, disponível diretamente no protótipo local. A API não expõe Swagger UI ou ReDoc.\n\nCódigo em português: obter_contrato → openapi do FastAPI.\nBanco SQLite: Não consulta o banco."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Contrato possui operações\", () => pm.expect(pm.response.json().paths).to.have.property(\"/api/attempts\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "17 Abrir interface compilada",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{endereco_base}}/",
+            "description": "Rota HTML da aplicação React. O catch-all GET /{path:path} também serve assets e rotas da SPA; não é endpoint de negócio.\n\nCódigo em português: servir_interface.\nBanco SQLite: Não consulta o banco."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "18 Importar laboratório legado (manual)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{endereco_base}}/api/legacy/import",
+            "description": "Operação opcional com efeitos: transfere a galeria antiga para o painel e limpa registros importados da origem. Não sobrescreve IDs em conflito (409). Use somente se pretende migrar dados. Exige executar_importacao_legada=true.\n\nCódigo em português: importar_legado.\nBanco SQLite: usuarios, divisoes_usuarios e referencias_biometricas; lê e limpa a galeria antiga."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.variables.get(\"executar_importacao_legada\") !== \"true\") pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 Limpeza demonstrativa",
+      "item": [
+        {
+          "name": "19 Excluir biometria do usuário demonstrativo",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}/biometrics",
+            "description": "Revoga referências e consentimento, preservando cadastro. Pode também remover cópia legada do mesmo ID. Restrito nesta collection a IDs demo-postman-.\n\nCódigo em português: excluir_biometria.\nBanco SQLite: Remove referencias_biometricas e limpa consentimento em usuarios."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "20 Excluir usuário demonstrativo",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{endereco_base}}/api/users/{{identificador_usuario}}",
+            "description": "Remove cadastro e referências. Preserva tentativas anteriores com vínculo de usuário nulo. Restrito a IDs demo-postman-.\n\nCódigo em português: excluir_usuario.\nBanco SQLite: Remove usuarios e vínculos; mantém tentativas_acesso com subject_id nulo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

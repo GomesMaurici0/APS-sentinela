@@ -127,7 +127,23 @@ class AttemptResponse(BaseModel):
     config: dict
 
 
+class VaultRecord(BaseModel):
+    id: str
+    title: str
+    level: int
+    division: str | None
+    location: str
+    status: str
+    summary: str
+
+
+class VaultResponse(BaseModel):
+    notice: str
+    records: list[VaultRecord]
+
+
 class DecisionResponse(AttemptResponse):
+    vault: VaultResponse | None = None
     capture: CaptureResponse | None = None
 
 

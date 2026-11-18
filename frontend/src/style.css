@@ -6,3 +6,8 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 
 .row-actions{flex-wrap:nowrap}
+.vault{margin-top:26px;border-top:1px solid var(--border);padding-top:22px;min-width:0}
+.vault-notice{padding:12px;border:1px solid var(--border);color:var(--accent);font-size:13px}
+.vault-record{padding:18px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.vault-record h3{margin:6px 0;font-size:16px}
+.vault-record p{font-size:13px}.vault-record .vault-status{color:var(--muted);margin-bottom:9px}

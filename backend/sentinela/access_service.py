@@ -16,6 +16,7 @@ from sentinela.autorizacao import AccessDecision, autorizar
 from sentinela.biometria.matching import MatchStatus, identificar
 from sentinela.biometria.models import DEFAULT_MODELS, MODEL_ID
 from sentinela.biometria.pipeline import Analysis, CaptureStatus, FacePipeline
+from sentinela.cofre import abrir_cofre
 from sentinela.config import BiometricConfig
 from sentinela.database import Database, agora
 from sentinela.errors import DomainError
@@ -153,6 +154,7 @@ class AccessService:
             motivo = resultado.status.value
         decisao = AccessDecision(False, motivo)
         identificador = None
+        cofre = None
         # Permissões, referências e auditoria usam a mesma transação: alterações de cadastro
         # não podem intercalar entre autorização e persistência da decisão.
         with self.database.conectar(write=True) as conexao:
@@ -173,6 +175,8 @@ class AccessService:
                     identificador = None
                     identificacao = None
                     decisao = AccessDecision(False, "falha_biometrica")
+            if decisao.granted:
+                cofre = abrir_cofre(self.database.obter_permissao(usuario), nivel_solicitado)
             tempo_ms = round((time.perf_counter() - inicio) * 1000, 2)
             cursor_sql = conexao.execute(
                 "INSERT INTO tentativas_acesso (occurred_at, subject_id, requested_level, "
@@ -194,10 +198,11 @@ class AccessService:
                 ),
             )
             linha = conexao.execute(
-                "SELECT * FROM tentativas_acesso WHERE id=  ?", (cursor_sql.lastrowid,)
+                "SELECT * FROM tentativas_acesso WHERE id=?", (cursor_sql.lastrowid,)
             ).fetchone()
             saida = registro_tentativa(linha)
         if falha_motor:
             raise DomainError(503, "Motor biométrico indisponível. Tentativa negada e registrada.")
+        saida["vault"] = cofre
         saida["capture"] = dados_captura(resultado) if resultado else None
         return saida

@@ -413,3 +413,45 @@ def test_migration_removes_only_auth_tables_and_preserves_users(tmp_path):
         assert not tables & {"administrators", "sessions", "login_failures"}
         assert {"usuarios", "referencias_biometricas", "tentativas_acesso"} <= tables
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize(
+    "level,divisions,requested,division,count",
+    [
+        (1, [], 1, None, 2),
+        (2, ["florestas"], 2, "florestas", 3),
+        (2, ["agua", "solo"], 2, "agua", 4),
+        (3, [], 3, None, 8),
+        (3, [], 1, None, 2),
+    ],
+)
+def test_vault_respects_permissions(environment, level, divisions, requested, division, count):
+    client, app, _ = environment
+    create(client, level=level, divisions=divisions)
+    assert cadastrar_biometria(client).status_code == 200
+    response = avaliar_acesso(client, app, requested, division)
+    assert response.status_code == 200
+    decision = response.json()
+    assert decision["granted"]
+    records = decision["vault"]["records"]
+    assert len(records) == count
+    assert all(r["level"] <= requested for r in records)
+    assert all(r["division"] in divisions for r in records if r["level"] == 2 and level != 3)
+    assert "vault" not in client.get("/api/attempts").json()["items"][0]
+
+
+@pytest.mark.parametrize("level,division", [(3, None), (2, "solo")])
+def test_denied_attempt_does_not_release_vault(environment, level, division):
+    client, app, _ = environment
+    create(client, level=2, divisions=["florestas"])
+    assert cadastrar_biometria(client).status_code == 200
+    decision = avaliar_acesso(client, app, level, division).json()
+    assert not decision["granted"]
+    assert decision["vault"] is None
+
+
+def test_unknown_face_does_not_release_vault(environment):
+    client, app, _ = environment
+    decision = avaliar_acesso(client, app, 3).json()
+    assert not decision["granted"]
+    assert decision["vault"] is None

@@ -6,10 +6,15 @@ export type Capture = {
   status: string; brightness: number | null; sharpness: number | null; elapsed_ms: number;
   width: number | null; height: number | null; faces: number[][]; aligned_image: string | null;
 };
+export type Vault = {
+  notice: string;
+  records: {id: string; title: string; level: number; division: string | null;
+    location: string; status: string; summary: string}[];
+};
 export type Attempt = {
   id: number; occurred_at: string; subject_id: string | null; requested_level: number;
   division: string | null; granted: boolean; reason: string; similarity: number | null;
-  elapsed_ms: number; capture?: Capture | null;
+  elapsed_ms: number; capture?: Capture | null; vault?: Vault | null;
 };
 export type Stats = { users: number; enrolled: number; attempts: number; granted: number; denied: number };
 export type Page<T> = { items: T[]; total: number; offset: number; limit: number };

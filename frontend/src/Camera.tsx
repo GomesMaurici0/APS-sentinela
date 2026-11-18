@@ -172,6 +172,7 @@ export function Camera({person: pessoa, onSaved: aoSalvar, onCancel: aoCancelar,
                   definirImagemCongelada(null);
                   definirCaptura(null);
                   definirErro('');
+                  definirDecisao(null);
                 }} disabled={processando || (!!pessoa && imagens.length >= 5)}>Retomar câmera</button>
                 :
                 <button className="primary" onClick={capturarQuadro} disabled={processando || (!!pessoa && imagens.length >= 5)}><ScanFace
@@ -206,6 +207,7 @@ export function Camera({person: pessoa, onSaved: aoSalvar, onCancel: aoCancelar,
         }}>Descartar amostras e recomeçar</button>}
       </> : <>
         <h2>Recurso solicitado</h2>
+        <p className="hint">O reconhecimento libera o cofre até o nível solicitado, respeitando as divisões do cadastro.</p>
         <label>Nível de acesso<select value={nivel} disabled={processando} onChange={evento => {
           definirNivel(Number(evento.target.value));
           definirDecisao(null);
@@ -217,7 +219,10 @@ export function Camera({person: pessoa, onSaved: aoSalvar, onCancel: aoCancelar,
         {nivel === 2 && <label>Divisão<input value={divisao} maxLength={60} onChange={evento => {
           definirDivisao(evento.target.value);
           definirDecisao(null);
-        }} placeholder="Ex.: florestas" disabled={processando}/></label>}
+        }} list="divisoes-cofre" placeholder="Ex.: florestas" disabled={processando}/></label>}
+        <datalist id="divisoes-cofre">
+          {['agua', 'solo', 'biodiversidade', 'florestas'].map(nome => <option key={nome} value={nome}/>)}
+        </datalist>
         <div className={`decision ${decisao ? decisao.granted ? 'granted' : 'denied' : ''}`} aria-live="polite">
           <ScanFace size={28}/>
           <h3>{decisao ? decisao.granted ? 'Acesso autorizado' : 'Acesso negado' : 'Aguardando avaliação'}</h3>
@@ -238,6 +243,19 @@ export function Camera({person: pessoa, onSaved: aoSalvar, onCancel: aoCancelar,
           </dl>}
         </div>
       </>}
+      {!pessoa && decisao?.granted && decisao.vault && <section className="vault" aria-label="Cofre ambiental">
+        <div className="section-heading"><h2>Cofre ambiental</h2>
+          <button className="quiet" onClick={() => definirDecisao(null)}>Fechar cofre</button>
+        </div>
+        <p className="vault-notice">{decisao.vault.notice}</p>
+        <p className="hint">{decisao.vault.records.length} registros liberados. Retomar a câmera ou alterar o recurso exige nova captura.</p>
+        {decisao.vault.records.map(registro => <article className="vault-record" key={registro.id}>
+          <p className="muted">{registro.id} · Nível {registro.level} · {registro.division ?? (registro.level === 3 ? 'Exclusivo do ministro' : 'Acesso geral')}</p>
+          <h3>{registro.title}</h3>
+          <p className="vault-status">{registro.status} · {registro.location}</p>
+          <p>{registro.summary}</p>
+        </article>)}
+      </section>}
       {erro && <p className="error" role="alert">{erro}</p>}
       {captura && <div className="processing"><h3>Processamento da captura</h3>
         <p>{traduzirMotivo(captura.status)}</p>
